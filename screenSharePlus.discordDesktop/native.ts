@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { execFile } from "child_process";
 import { desktopCapturer, type DesktopCapturerSource, type Display, type IpcMainInvokeEvent, screen } from "electron";
+import { promisify } from "util";
 
 import { type CaptureMonitor, type Compositor, startCompositor } from "./native/compositor";
 import { closeIdentification, showIdentification } from "./native/identify";
@@ -88,7 +90,7 @@ export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknow
     | { success: false; error: string; }
 > {
     const followCursor = isDisplayId(displayId);
-    if ((!followCursor && !(typeof displayId === "string" && /^(?:screen|window):\d{1,20}:\d+$/.test(displayId)))
+    if ((!followCursor && !(typeof displayId === "string" && /^(?:(?:screen|window):\d{1,20}:\d+|screen-handle:\d{1,20})$/.test(displayId)))
         || !Array.isArray(ignored) || ignored.length > 64 || !ignored.every(isDisplayId))
         return { success: false, error: "Invalid monitor selection." };
     if (typeof frameRate !== "number" || !Number.isInteger(frameRate) || frameRate < 1 || frameRate > 240)
@@ -107,8 +109,10 @@ export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknow
         let initialId = String(displayId);
         let windowHandle: string | undefined;
         if (!followCursor) {
-            const sources = await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 } });
-            const source = sources.find((source: DesktopCapturerSource) => source.id === displayId);
+            const sources = initialId.startsWith("window:")
+                ? await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } })
+                : (await getCaptureSources()).map(source => ({ id: source.id, display_id: source.displayId }));
+            const source = sources.find(source => source.id === displayId);
             if (!source) return { success: false, error: "That capture source is no longer available." };
             if (source.id.startsWith("window:")) {
                 windowHandle = source.id.split(":")[1];
@@ -172,11 +176,46 @@ function getCaptureSources() {
     if (sourceCache === undefined || displayLayout !== layout) {
         displayLayout = layout;
         sourceCache = desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } })
-            .then((sources: DesktopCapturerSource[]) => sources.map((source: DesktopCapturerSource) => ({
-                id: source.id,
-                displayId: source.display_id,
-                name: source.name
-            })));
+            .then(async (sources: DesktopCapturerSource[]) => {
+                const monitors = process.platform === "win32" ? captureMonitors([]) : [];
+                let handles: string[] = [];
+                if (monitors.length > 0) {
+                    const points = monitors.map(monitor => `${Math.round(monitor.x + monitor.width / 2)},${Math.round(monitor.y + monitor.height / 2)}`).join(",");
+                    const script = `Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenSharePlusMonitor {
+    [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(Point point, uint flags);
+    public static void Print(int[] points) {
+        IntPtr previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
+        try {
+            for (int i = 0; i < points.Length; i += 2)
+                Console.WriteLine(MonitorFromPoint(new Point { X = points[i], Y = points[i + 1] }, 0).ToInt64());
+        } finally { SetThreadDpiAwarenessContext(previous); }
+    }
+}
+'@
+[ScreenSharePlusMonitor]::Print([int[]]@(${points}))`;
+                    const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+                        windowsHide: true, timeout: 10_000
+                    });
+                    handles = stdout.trim().split(/\r?\n/);
+                    if (handles.length !== monitors.length || handles.some(handle => !/^[1-9]\d{0,19}$/.test(handle)))
+                        throw new Error("Could not resolve Windows monitor handles.");
+                }
+                return sources.map((source: DesktopCapturerSource) => {
+                    const index = monitors.findIndex(monitor => monitor.id === source.display_id);
+                    if (process.platform === "win32" && index < 0)
+                        throw new Error("Could not match a Windows capture monitor.");
+                    return {
+                        id: process.platform === "win32" ? `screen-handle:${handles[index]}` : source.id,
+                        displayId: source.display_id,
+                        name: source.name
+                    };
+                });
+            });
     }
 
     return sourceCache;

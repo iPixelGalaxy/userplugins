@@ -96,7 +96,7 @@ async function followCursor() {
     const currentGeneration = generation;
 
     try {
-        const ignoredMonitors = settings.plain.ignoredMonitors;
+        const { ignoredMonitors } = settings.plain;
         let result = await Native.getCursorSource(displayId, ignoredMonitors);
         if (currentGeneration !== generation || !following) return;
         if (ignoredMonitors !== settings.plain.ignoredMonitors) return;
@@ -388,11 +388,11 @@ export default definePlugin({
         stopFollowing();
         if (typeof source !== "object" || source === null) return source;
         const followsCursor = source.id === SOURCE_ID;
-        if (!followsCursor && (!settings.plain.useObsCapture || !/^(?:screen|window):/.test(source.id))) return source;
+        if (!followsCursor && (!settings.plain.useObsCapture || !/^(?:screen|screen-handle|window):/.test(source.id))) return source;
         const currentGeneration = generation;
-        const ignoredMonitors = settings.plain.ignoredMonitors;
+        const { ignoredMonitors } = settings.plain;
         const frameRate = Math.min(ApplicationStreamingSettingsStore.getState().fps, settings.store.limitFrameRate ? 30 : 240);
-        const captureMethod = settings.store.captureMethod;
+        const { captureMethod } = settings.store;
 
         try {
             if (!followsCursor) {

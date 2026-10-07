@@ -31,9 +31,9 @@ export const settings = definePluginSettings({
         type: OptionType.SELECT,
         description: "Capture method used by the monitor fade compositor.",
         options: [
-            { label: "WGC with DXGI fallback", value: "wgc" satisfies CaptureMethod, default: true },
-            { label: "OBS Automatic", value: "obs" satisfies CaptureMethod },
-            { label: "DXGI Desktop", value: "dxgi" satisfies CaptureMethod }
+            { label: "WGC with DXGI fallback", value: "wgc" as const satisfies CaptureMethod, default: true },
+            { label: "OBS Automatic", value: "obs" as const satisfies CaptureMethod },
+            { label: "DXGI Desktop", value: "dxgi" as const satisfies CaptureMethod }
         ],
         hidden: true
     },
