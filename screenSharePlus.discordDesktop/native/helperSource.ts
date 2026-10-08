@@ -79,7 +79,6 @@ public static class Gpu {
     public delegate int GetBuffer(IntPtr self, uint index, ref Guid iid, out IntPtr surface);
     public delegate int CreateSwapChain(IntPtr self, IntPtr device, IntPtr window, ref SwapChainDesc desc, IntPtr fullscreen, IntPtr output, out IntPtr swapChain);
     public delegate int WindowAssociation(IntPtr self, IntPtr window, uint flags);
-    public delegate int ThreadPriority(IntPtr self, int priority);
     public delegate IntPtr BlobValue(IntPtr self);
     public delegate int GetInterface(IntPtr self, ref Guid iid, out IntPtr result);
     public delegate void GetTextureDesc(IntPtr self, out TextureDesc desc);
@@ -143,7 +142,6 @@ public sealed class Renderer : IDisposable {
         IntPtr dxgiDevice;
         Gpu.Check(Marshal.QueryInterface(Device, ref dxgiId, out dxgiDevice), "Reading the graphics device");
         try {
-            Gpu.Slot<Gpu.ThreadPriority>(dxgiDevice, 10)(dxgiDevice, 7);
             IntPtr inspectable;
             Gpu.Check(Gpu.CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out inspectable), "Sharing the graphics device");
             CaptureDevice = (IDirect3DDevice)Marshal.GetObjectForIUnknown(inspectable);
@@ -284,7 +282,7 @@ public sealed class MonitorCapture : IDisposable {
         session = pool.CreateCaptureSession(item);
         try { session.IsBorderRequired = false; } catch { }
         try { session.IsCursorCaptureEnabled = true; } catch { }
-        try { session.MinUpdateInterval = TimeSpan.FromMilliseconds(Math.Max(1, 500 / Math.Max(1, frameRate))); } catch { }
+        try { session.MinUpdateInterval = TimeSpan.FromMilliseconds(1000.0 / Math.Max(1, frameRate)); } catch { }
         session.StartCapture();
     }
 
@@ -388,7 +386,7 @@ public sealed class CaptureWindow : Form {
     protected override void OnShown(EventArgs args) {
         base.OnShown(args);
         IntPtr handle = Handle;
-        new Thread(() => Render(handle)) { IsBackground = true, Priority = ThreadPriority.AboveNormal }.Start();
+        new Thread(() => Render(handle)) { IsBackground = true }.Start();
         new Thread(ReadCommands) { IsBackground = true }.Start();
     }
 
@@ -404,7 +402,7 @@ public sealed class CaptureWindow : Form {
     void Render(IntPtr handle) {
         Renderer renderer = null;
         MonitorCapture current = null, pending = null, previous = null;
-        int pendingSequence = 0;
+        int pendingSequence = 0, fadingSequence = 0;
         long pendingSince = 0, fadeStart = 0;
         bool ready = false;
         Stopwatch clock = Stopwatch.StartNew();
@@ -426,7 +424,11 @@ public sealed class CaptureWindow : Form {
                         pending = null;
                     }
                     if (monitor == current.Monitor) { Emit(new { type = "updated", sequence = command.sequence }); continue; }
-                    if (previous != null) { previous.Dispose(); previous = null; }
+                    if (previous != null) {
+                        previous.Dispose(); previous = null;
+                        Emit(new { type = "updated", sequence = fadingSequence });
+                        fadingSequence = 0;
+                    }
                     try {
                         pending = new MonitorCapture(renderer, monitor, configuration.fps);
                         pendingSequence = command.sequence;
@@ -444,7 +446,7 @@ public sealed class CaptureWindow : Form {
                         current = pending;
                         pending = null;
                         fadeStart = clock.ElapsedMilliseconds;
-                        Emit(new { type = "updated", sequence = pendingSequence });
+                        fadingSequence = pendingSequence;
                     } else if (clock.ElapsedMilliseconds - pendingSince > 2000) {
                         pending.Dispose();
                         pending = null;
@@ -458,6 +460,10 @@ public sealed class CaptureWindow : Form {
                 if (previous != null) renderer.DrawLayer(previous, 1 - progress);
                 renderer.DrawLayer(current, progress);
                 renderer.End();
+                if (previous == null && fadingSequence != 0) {
+                    Emit(new { type = "updated", sequence = fadingSequence });
+                    fadingSequence = 0;
+                }
 
                 if (!ready && current.HasFrame) {
                     ready = true;
@@ -469,10 +475,7 @@ public sealed class CaptureWindow : Form {
                 next += interval;
                 double now = clock.Elapsed.TotalMilliseconds;
                 if (next < now - interval) next = now;
-                while ((now = clock.Elapsed.TotalMilliseconds) < next) {
-                    if (next - now > 1.5) Thread.Sleep(1);
-                    else Thread.SpinWait(50);
-                }
+                if (next > now) Thread.Sleep((int)Math.Ceiling(next - now));
             }
         } catch (Exception error) {
             Emit(new { type = "error", sequence = 0, message = error.Message });
@@ -488,7 +491,6 @@ public sealed class CaptureWindow : Form {
     [STAThread] public static void Main(string[] args) {
         Gpu.SetProcessDpiAwarenessContext(new IntPtr(-4));
         Gpu.timeBeginPeriod(1);
-        try { Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal; } catch { }
         CaptureCommand configuration = Serializer.Deserialize<CaptureCommand>(Encoding.UTF8.GetString(Convert.FromBase64String(args[0])));
         Application.Run(new CaptureWindow(configuration));
     }

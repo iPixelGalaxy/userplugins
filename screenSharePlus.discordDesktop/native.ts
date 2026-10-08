@@ -75,7 +75,7 @@ function retireCompositor(previous: Compositor) {
     retiringCompositors.add(previous);
     setTimeout(() => {
         if (retiringCompositors.delete(previous)) previous.close();
-    }, 3_000);
+    }, 500);
 }
 
 function canvasSize(monitors: CaptureMonitor[], resolution: number) {

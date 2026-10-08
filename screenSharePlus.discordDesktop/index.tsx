@@ -8,8 +8,8 @@ import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
 import type { MediaEngineConnection } from "@vencord/discord-types";
-import { findByPropsLazy } from "@webpack";
-import { ApplicationStreamingSettingsStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
+import { findByPropsLazy, findStoreLazy } from "@webpack";
+import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
 import { settings } from "./settings";
@@ -52,6 +52,7 @@ interface CaptureConnection {
     goLiveSourceIdentifier: string | null;
     soundshareId: number | null;
     vcScreenSharePlusGraphics?: boolean;
+    vcScreenSharePlusCaptureDevice?: boolean;
 }
 
 interface DesktopSource {
@@ -60,7 +61,13 @@ interface DesktopSource {
 }
 
 interface CaptureDescription {
-    desktopDescription?: { id: string; soundshareId: number | null; useGraphicsCapture?: boolean; };
+    desktopDescription?: { id: string; soundshareId: number | null; useGraphicsCapture?: boolean; useCaptureDeviceForEncode?: boolean; };
+}
+
+interface PreviewProps {
+    streamId: string;
+    paused?: boolean;
+    onReady?(): void;
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
@@ -68,6 +75,7 @@ const logger = new Logger("ScreenSharePlus");
 const SOURCE_ID = "screen:vc-screenshare-plus";
 const SOURCE_NAME = "Monitor under mouse";
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
+const VideoStreamStore: { getStreamId(userId: string, guildId: string | null, context: string): string | undefined; } = findStoreLazy("VideoStreamStore");
 
 let following = false;
 let generation = 0;
@@ -83,6 +91,7 @@ let audioSourceId: string | undefined;
 let syncing = false;
 let syncQueued = false;
 let syncTimeout: ReturnType<typeof setTimeout> | undefined;
+let previewRecovery = false;
 
 function stopFollowing() {
     following = false;
@@ -94,6 +103,7 @@ function stopFollowing() {
     compositorKey = undefined;
     audioSourceId = undefined;
     syncQueued = false;
+    previewRecovery = false;
     void Native.stopCompositor().catch((error: unknown) => logger.warn("Could not close the monitor fade helper.", error));
     for (const timer of [syncTimeout, startTimeout]) if (timer !== undefined) clearTimeout(timer);
     syncTimeout = startTimeout = undefined;
@@ -146,50 +156,41 @@ function scheduleSync() {
     }, 250);
 }
 
-// Starts, rebuilds or stops the fade helper while sharing, so settings apply without restarting the stream.
-async function syncCapture() {
+async function syncCapture(force = false) {
     if (syncing) {
         syncQueued = true;
         return;
     }
     if (!following || displayId === undefined || MediaEngineStore.getGoLiveSource()?.desktopSource == null) return;
     const quality = compositorQuality();
-    const wanted = settings.plain.fadeTransitions;
-    if (wanted ? compositorSourceId !== undefined && compositorKey === quality.key : compositorSourceId === undefined) return;
+    if (!force && (compositorSourceId === undefined || settings.plain.fadeTransitions && compositorKey === quality.key)) return;
 
     syncing = true;
-    const currentGeneration = generation;
+    const currentGeneration = ++generation;
     try {
         const { ignoredMonitors } = settings.plain;
         const screen = await Native.getCursorSource(undefined, ignoredMonitors);
         if (currentGeneration !== generation || !following) return;
-        if (!screen.success || screen.sourceId === null) return;
-        if (wanted) {
-            const prepared = await Native.prepareCompositor(screen.displayId, ignoredMonitors, quality.frameRate, quality.resolution, true);
-            if (currentGeneration !== generation || !following) return;
-            if (!prepared.success) {
-                logger.warn(prepared.error);
-                showToast("Could not start monitor fades. Sharing continues without them.");
-                return;
-            }
-            displayId = screen.displayId;
-            compositorSourceId = prepared.sourceId;
-            compositorKey = quality.key;
-            audioSourceId = screen.sourceId;
-            switchSource(prepared.sourceId);
-        } else {
-            displayId = screen.displayId;
-            compositorSourceId = compositorKey = audioSourceId = undefined;
-            switchSource(screen.sourceId);
-            void Native.stopCompositor(true);
+        if (ignoredMonitors !== settings.plain.ignoredMonitors) {
+            syncQueued = true;
+            return;
         }
+        if (!screen.success) {
+            stopCapture(`ScreenSharePlus stopped sharing. ${screen.error}`);
+            return;
+        }
+        if (screen.sourceId === null) return;
+        displayId = screen.displayId;
+        compositorSourceId = compositorKey = audioSourceId = undefined;
+        switchSource(screen.sourceId);
+        void Native.stopCompositor(true);
     } catch (error) {
         if (currentGeneration === generation) logger.error("Could not update monitor fades.", error);
     } finally {
         syncing = false;
         if (syncQueued) {
             syncQueued = false;
-            scheduleSync();
+            void syncCapture(true);
         }
     }
 }
@@ -214,24 +215,34 @@ async function followCursor() {
             return;
         }
 
-        if (compositorSourceId !== undefined) {
-            const moved = await Native.setCompositorMonitor(result.displayId, ignoredMonitors);
-            if (currentGeneration !== generation || !following) return;
-            if (moved.success) {
-                displayId = result.displayId;
+        if (settings.plain.fadeTransitions && displayId !== undefined) {
+            const quality = compositorQuality();
+            const prepared = await Native.prepareCompositor(displayId, ignoredMonitors, quality.frameRate, quality.resolution);
+            if (currentGeneration !== generation || !following) {
+                if (prepared.success) void Native.stopCompositor();
                 return;
             }
-            logger.warn(moved.error);
-            compositorSourceId = compositorKey = audioSourceId = undefined;
-            void Native.stopCompositor(true);
+            if (prepared.success && settings.plain.fadeTransitions) {
+                compositorSourceId = prepared.sourceId;
+                compositorKey = quality.key;
+                audioSourceId = result.sourceId;
+                switchSource(prepared.sourceId);
+                const moved = await Native.setCompositorMonitor(result.displayId, ignoredMonitors);
+                if (currentGeneration !== generation || !following) return;
+                if (!moved.success) logger.warn(moved.error);
+            } else {
+                if (!prepared.success) logger.warn(prepared.error);
+                else void Native.stopCompositor();
+            }
         }
 
         displayId = result.displayId;
-        if (MediaEngineStore.getGoLiveSource()?.desktopSource?.id.split(":")[1] === result.sourceId.split(":")[1]) {
+        const faded = compositorSourceId !== undefined;
+        compositorSourceId = compositorKey = audioSourceId = undefined;
+        if (MediaEngineStore.getGoLiveSource()?.desktopSource?.id === result.sourceId) {
             sourceId = result.sourceId;
-            return;
-        }
-        switchSource(result.sourceId);
+        } else switchSource(result.sourceId);
+        if (faded) void Native.stopCompositor(true);
     } catch (error) {
         if (currentGeneration !== generation) return;
         logger.error("Could not switch the shared monitor.", error);
@@ -299,6 +310,10 @@ export default definePlugin({
                     replace: "$self.useGraphicsCapture($&)"
                 },
                 {
+                    match: /(?<=useCaptureDeviceForEncode:)\(0,\i\.\i\)\(\)/,
+                    replace: "$self.useCaptureDeviceForEncode($&)"
+                },
+                {
                     // Discord stops soundshare and clears the stream before every source change, which cuts audio.
                     match: /(\i)\?\.desktopSource!=null&&\1\.desktopSource\.id!==(\i)\?\.desktopSource\?\.id&&/,
                     replace: "$&!$self.keepSource($1.desktopSource,$2?.desktopSource)&&"
@@ -310,6 +325,13 @@ export default definePlugin({
             replacement: {
                 match: /(\i)(?=&&\(\i\+=",singleCpuCopy"\))/,
                 replace: "($1=$self.allowSingleCpuCopy($1,this.context,this.getVoiceParticipantType()))"
+            }
+        },
+        {
+            find: '"DirectVideo"',
+            replacement: {
+                match: /function \i\((\i)\)\{(?=return function\(\i,\i\)\{let\{streamId:)/,
+                replace: "$&$1=$self.usePreviewRecovery($1);"
             }
         },
         {
@@ -414,6 +436,36 @@ export default definePlugin({
         return supported && (compositorSourceId !== undefined || settings.plain.captureApi !== "dxgi");
     },
 
+    useCaptureDeviceForEncode(supported: boolean) {
+        return supported && !previewRecovery;
+    },
+
+    usePreviewRecovery<T extends PreviewProps>(props: T): T {
+        const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+        const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
+        const own = stream !== null && props.streamId === VideoStreamStore.getStreamId(UserStore.getCurrentUser().id, stream.guildId, "stream");
+        React.useEffect(() => {
+            if (!own || props.paused || previewRecovery || MediaEngineStore.getGoLiveSource()?.desktopSource == null) return;
+            timer.current = setTimeout(() => {
+                const current = ApplicationStreamingStore.getCurrentUserActiveStream();
+                if (previewRecovery || current === null || MediaEngineStore.getGoLiveSource()?.desktopSource == null
+                    || props.streamId !== VideoStreamStore.getStreamId(UserStore.getCurrentUser().id, current.guildId, "stream")) return;
+                previewRecovery = true;
+                logger.warn("Restarting capture because the local stream preview did not receive video.");
+                recapture();
+            }, 5000);
+            return () => {
+                if (timer.current !== undefined) clearTimeout(timer.current);
+                timer.current = undefined;
+            };
+        }, [props.streamId, props.paused, own]);
+        return { ...props, onReady() {
+            if (timer.current !== undefined) clearTimeout(timer.current);
+            timer.current = undefined;
+            props.onReady?.();
+        } };
+    },
+
     getSourcePid(id: string, pid: number | null) {
         return id === compositorSourceId && audioSourceId !== undefined ? SoundshareStore.getPidFromDesktopSource(audioSourceId) : pid;
     },
@@ -490,8 +542,7 @@ export default definePlugin({
 
     onIgnoredMonitorsChange() {
         if (!following) return;
-        generation++;
-        void followCursor();
+        void syncCapture(true);
     },
 
     startStream(event: StreamStartEvent) {
@@ -507,8 +558,11 @@ export default definePlugin({
 
     sameCapture(connection: CaptureConnection, source: CaptureDescription, id: string | null) {
         const graphics = source.desktopDescription?.useGraphicsCapture;
-        if (connection.goLiveSourceIdentifier === id && connection.vcScreenSharePlusGraphics === graphics) return true;
+        const captureDevice = source.desktopDescription?.useCaptureDeviceForEncode;
+        if (connection.goLiveSourceIdentifier === id && connection.vcScreenSharePlusGraphics === graphics
+            && connection.vcScreenSharePlusCaptureDevice === captureDevice) return true;
         connection.vcScreenSharePlusGraphics = graphics;
+        connection.vcScreenSharePlusCaptureDevice = captureDevice;
         return false;
     },
 
@@ -556,24 +610,9 @@ export default definePlugin({
             }
             if (result.sourceId === null) return null;
 
-            let sharedSourceId = result.sourceId;
-            if (settings.plain.fadeTransitions) {
-                const quality = compositorQuality();
-                const prepared = await Native.prepareCompositor(result.displayId, ignoredMonitors, quality.frameRate, quality.resolution);
-                if (currentGeneration !== generation) return null;
-                if (prepared.success) {
-                    sharedSourceId = compositorSourceId = prepared.sourceId;
-                    compositorKey = quality.key;
-                    audioSourceId = result.sourceId;
-                } else {
-                    logger.warn(prepared.error);
-                    showToast("Could not start monitor fades. Sharing without them.");
-                }
-            }
-
             following = true;
             displayId = result.displayId;
-            sourceId = sharedSourceId;
+            sourceId = result.sourceId;
             startTimeout = setTimeout(() => {
                 if (intervalId === undefined) stopFollowing();
             }, 30_000);
