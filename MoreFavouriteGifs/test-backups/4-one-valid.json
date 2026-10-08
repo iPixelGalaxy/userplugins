@@ -1,0 +1,6 @@
+{
+    "gifs": {
+        "https://media.tenor.com/plugin-test-valid.gif": { "format": 1, "src": "https://media.tenor.com/plugin-test-valid.gif", "width": 200, "height": 200, "order": 1, "extra": "should be dropped" },
+        "not a url": { "format": 1, "src": "https://example.com/d.gif", "width": 200, "height": 200, "order": 1 }
+    }
+}

@@ -1,0 +1,7 @@
+{
+    "gifs": {
+        "javascript:alert(1)": { "format": 1, "src": "https://example.com/a.gif", "width": 200, "height": 200, "order": 1 },
+        "https://example.com/missing-fields.gif": { "src": "https://example.com/b.gif" },
+        "https://example.com/bad-number.gif": { "format": "1", "src": "https://example.com/c.gif", "width": 200, "height": 200, "order": 1 }
+    }
+}
