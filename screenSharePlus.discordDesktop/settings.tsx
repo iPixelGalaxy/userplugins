@@ -48,16 +48,6 @@ export const settings = definePluginSettings({
         hidden: true,
         onChange() { ScreenSharePlus.updateBitrate(); }
     },
-    limitFrameRate: {
-        type: OptionType.BOOLEAN,
-        description: "Limit screen sharing to 30 FPS for more detail during movement.",
-        default: false,
-        hidden: true,
-        onChange() {
-            ScreenSharePlus.updateBitrate();
-            ScreenSharePlus.onFrameRateLimitChange();
-        }
-    },
     degradation: {
         type: OptionType.SELECT,
         description: "What WebRTC gives up first when your upload cannot keep up.",

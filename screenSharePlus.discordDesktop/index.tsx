@@ -142,7 +142,7 @@ function recapture() {
 function compositorQuality() {
     const live = MediaEngineStore.getGoLiveSource()?.quality;
     const state = ApplicationStreamingSettingsStore.getState();
-    const frameRate = Math.min(live?.frameRate || state.fps, settings.store.limitFrameRate ? 30 : 240);
+    const frameRate = Math.min(live?.frameRate || state.fps, 240);
     const resolution = live?.resolution ?? state.resolution;
     return { frameRate, resolution, key: `${frameRate}:${resolution}` };
 }
@@ -475,14 +475,12 @@ export default definePlugin({
     // bandwidth estimate collapses toward the minimum; the floor keeps room for sudden motion.
     overrideBitrate<T extends StreamBitrate>(quality: T, streaming: boolean, full: StreamBitrate = quality): T {
         if (!streaming) return quality;
-        const { bitrate, lockBitrate, limitFrameRate } = settings.store;
+        const { bitrate, lockBitrate } = settings.store;
         const maximum = bitrate * 1_000_000 || Math.max(quality.bitrateMax, full.bitrateMax);
         return { ...quality,
             bitrateMin: lockBitrate ? maximum : Math.min(maximum, Math.max(full.bitrateMin, Math.round(maximum / 4))),
             bitrateMax: maximum,
-            bitrateTarget: bitrate === 0 && !lockBitrate ? Math.max(full.bitrateTarget ?? 0, Math.round(maximum / 2)) : maximum,
-            capture: limitFrameRate ? { ...quality.capture, framerate: Math.min(quality.capture.framerate, 30) } : quality.capture,
-            encode: limitFrameRate ? { ...quality.encode, framerate: Math.min(quality.encode.framerate, 30) } : quality.encode
+            bitrateTarget: bitrate === 0 && !lockBitrate ? Math.max(full.bitrateTarget ?? 0, Math.round(maximum / 2)) : maximum
         };
     },
 
@@ -537,8 +535,6 @@ export default definePlugin({
         if (settings.store.fadeTransitions) void Native.warmCompositor();
         scheduleSync();
     },
-
-    onFrameRateLimitChange: scheduleSync,
 
     onIgnoredMonitorsChange() {
         if (!following) return;
