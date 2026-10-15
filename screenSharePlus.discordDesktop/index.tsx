@@ -12,7 +12,7 @@ import { findByPropsLazy, findStoreLazy } from "@webpack";
 import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
-import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, voiceChannelSelected } from "./retain";
+import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
 import { settings } from "./settings";
 
 interface StreamBitrate {
@@ -525,10 +525,14 @@ export default definePlugin({
         VOICE_CHANNEL_SELECT: voiceChannelSelected,
         VOICE_STATE_UPDATES: queueResume,
         RTC_CONNECTION_STATE({ context, state }: { context: string; state: string; }) {
-            if (context === "default" && state === "RTC_CONNECTED") queueResume();
+            if (context !== "default") return;
+            if (state === "RTC_CONNECTED") queueResume();
+            else pauseRetention();
         },
+        WINDOW_UNLOAD() { pauseRetention(); },
         MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings }: SourceEvent) {
             if (settings?.desktopSettings != null) rememberScreenshare(following && settings.desktopSettings.sourceId === sourceId);
+            else if (settings === null || settings.context === "stream") pauseRetention();
             if (!following) return;
             if (settings?.qualityOptions != null) scheduleSync();
             const id = settings?.desktopSettings?.sourceId;
@@ -550,6 +554,7 @@ export default definePlugin({
                 && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
         },
         STREAM_DELETE({ streamKey }: { streamKey: string; }) {
+            pauseRetention(streamKey);
             if (streamKey.endsWith(UserStore.getCurrentUser().id)
                 && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
             queueResume();
@@ -566,6 +571,8 @@ export default definePlugin({
     onRetainChange(enabled: boolean) {
         changeRetention(enabled, following);
     },
+
+    onRetainTimeoutChange: updateRetentionTimeout,
 
     onCaptureApiChange: recapture,
 

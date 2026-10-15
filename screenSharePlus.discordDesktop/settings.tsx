@@ -21,6 +21,15 @@ export const settings = definePluginSettings({
         default: false,
         onChange(value: boolean) { ScreenSharePlus.onRetainChange(value); }
     },
+    retainScreenshareTimeout: {
+        type: OptionType.SLIDER,
+        description: "Minutes after leaving voice before your saved screenshare expires.",
+        markers: [1, 5, 10, 15, 30],
+        default: 5,
+        stickToMarkers: false,
+        hidden: true,
+        onChange() { ScreenSharePlus.onRetainTimeoutChange(); }
+    },
     captureApi: {
         type: OptionType.SELECT,
         description: "Windows API Discord uses to capture your screen.",

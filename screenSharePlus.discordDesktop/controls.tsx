@@ -7,6 +7,7 @@
 import ErrorBoundary from "@components/ErrorBoundary";
 import { useAwaiter } from "@utils/react";
 import type { PluginNative } from "@utils/types";
+import { findComponentByCodeLazy } from "@webpack";
 import { Menu, React, useEffect } from "@webpack/common";
 
 import type { Monitor } from "./native";
@@ -17,10 +18,11 @@ interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
-const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview", "retainScreenshare"] satisfies Array<keyof typeof settings.def>;
+const RetainIndicator = findComponentByCodeLazy("displayOnly:!0", 'usageVariant:"indicator"');
+const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview", "retainScreenshare", "retainScreenshareTimeout"] satisfies Array<keyof typeof settings.def>;
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
-    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview, retainScreenshare } = settings.use(KEYS);
+    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview, retainScreenshare, retainScreenshareTimeout } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
@@ -28,13 +30,24 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
-            <Menu.MenuCheckboxItem
+            <Menu.MenuItem
                 id="vc-screenshare-plus-retain"
                 label="Retain Screenshare"
-                subtext="Resume in the same server after switching voice channels, crashing, or reloading. Stop Sharing clears the saved source."
-                checked={retainScreenshare}
+                subtext={`Rejoin within ${retainScreenshareTimeout} ${retainScreenshareTimeout === 1 ? "minute" : "minutes"} to resume in the same server. Stop Sharing clears the saved source.`}
+                icon={RetainIndicator}
+                iconProps={{ checked: retainScreenshare }}
+                trailingIndicator={{ type: "icon", icon: RetainIndicator, checked: retainScreenshare }}
+                dontCloseOnAction
                 action={() => { settings.store.retainScreenshare = !retainScreenshare; }}
-            />
+            >
+                <Menu.MenuControlItem
+                    id="vc-screenshare-plus-retain-timeout"
+                    label={`Rejoin timeout: ${retainScreenshareTimeout} ${retainScreenshareTimeout === 1 ? "minute" : "minutes"}`}
+                    control={(props, ref) => <Menu.MenuSliderControl {...props} ref={ref} minValue={1} maxValue={30} value={retainScreenshareTimeout}
+                        renderValue={(value: number) => `${Math.round(value)} ${Math.round(value) === 1 ? "minute" : "minutes"}`}
+                        onChange={(value: number) => { settings.store.retainScreenshareTimeout = Math.round(value); }} />}
+                />
+            </Menu.MenuItem>
             <Menu.MenuItem id="vc-screenshare-plus-capture" label="Capture API" subtext="Applies immediately.">
                 {settings.def.captureApi.options.map(({ label, value }) => (
                     <Menu.MenuRadioItem

@@ -37,6 +37,7 @@ interface RetainedStream {
     guildId: string;
     source: Source;
     sourcePid: number | null;
+    lastActiveAt?: number;
     options: {
         preset: number;
         resolution: number;
@@ -58,13 +59,59 @@ let resumeCancellation = 0;
 let attemptedChannel: string | undefined;
 let resumingChannel: string | undefined;
 let writes = Promise.resolve();
+let heartbeat: ReturnType<typeof setInterval> | undefined;
+let heartbeatChannel: string | undefined;
+let expiryTimeout: ReturnType<typeof setTimeout> | undefined;
 
 function save(value: RetainedStream | undefined) {
     if (value !== undefined && lodash.isEqual(retained, value)) return;
     retained = value;
     revision++;
+    if (value === undefined && heartbeat !== undefined) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+        heartbeatChannel = undefined;
+    }
     writes = writes.then(() => value === undefined ? DataStore.del(KEY) : DataStore.set(KEY, value))
         .catch((error: unknown) => logger.error("Could not save the retained screenshare.", error));
+    updateRetentionTimeout();
+}
+
+export function updateRetentionTimeout() {
+    if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
+    expiryTimeout = undefined;
+    if (!running || heartbeat !== undefined || !retained) return;
+    const remaining = (retained.lastActiveAt ?? 0) + settings.plain.retainScreenshareTimeout * 60_000 - Date.now();
+    if (remaining <= 0) {
+        save(undefined);
+        return;
+    }
+    expiryTimeout = setTimeout(() => {
+        expiryTimeout = undefined;
+        save(undefined);
+    }, remaining);
+}
+
+function startHeartbeat(channelId: string) {
+    if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
+    expiryTimeout = undefined;
+    heartbeatChannel = channelId;
+    if (heartbeat !== undefined) return;
+    heartbeat = setInterval(() => {
+        if (retained) save({ ...retained, lastActiveAt: Date.now() });
+    }, 5000);
+}
+
+export function pauseRetention(streamKey?: string) {
+    if (streamKey) {
+        const [, , channelId, ownerId] = streamKey.split(":");
+        if (ownerId !== UserStore.getCurrentUser().id || channelId !== heartbeatChannel) return;
+    }
+    if (heartbeat === undefined) return;
+    clearInterval(heartbeat);
+    heartbeat = undefined;
+    heartbeatChannel = undefined;
+    if (retained) save({ ...retained, lastActiveAt: Date.now() });
 }
 
 export function rememberScreenshare(following: boolean, event?: StreamStart) {
@@ -72,7 +119,7 @@ export function rememberScreenshare(following: boolean, event?: StreamStart) {
     const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
     const guildId = event ? event.guildId : stream?.guildId;
     const channelId = event?.channelId ?? stream?.channelId;
-    if (!guildId || channelId !== SelectedChannelStore.getVoiceChannelId()) return;
+    if (!guildId || !channelId || channelId !== SelectedChannelStore.getVoiceChannelId()) return;
     const metadata = ApplicationStreamingStore.getStreamerActiveStreamMetadata();
     const live = MediaEngineStore.getGoLiveSource();
     if (!event && (metadata === null || live?.desktopSource == null)) return;
@@ -84,6 +131,7 @@ export function rememberScreenshare(following: boolean, event?: StreamStart) {
         guildId,
         source: { id: sourceId, name: following ? FOLLOW_SOURCE_NAME : event?.sourceName ?? metadata?.sourceName ?? "", url: "" },
         sourcePid: following ? null : SoundshareStore.getPidFromDesktopSource(sourceId),
+        lastActiveAt: Date.now(),
         options: {
             preset: state.preset,
             resolution: state.resolution,
@@ -92,6 +140,7 @@ export function rememberScreenshare(following: boolean, event?: StreamStart) {
             previewDisabled: event?.previewDisabled ?? metadata?.previewDisabled ?? false
         }
     });
+    startHeartbeat(channelId);
 }
 
 export async function startRetention(following: boolean) {
@@ -106,6 +155,7 @@ export async function startRetention(following: boolean) {
             return;
         }
         rememberScreenshare(following);
+        updateRetentionTimeout();
         queueResume();
     } catch (error) {
         logger.error("Could not load the retained screenshare.", error);
@@ -113,7 +163,9 @@ export async function startRetention(following: boolean) {
 }
 
 export function stopRetention() {
+    pauseRetention();
     running = false;
+    updateRetentionTimeout();
     revision++;
     cancellation++;
     attemptedChannel = undefined;
@@ -123,10 +175,14 @@ export function changeRetention(enabled: boolean, following: boolean) {
     revision++;
     cancellation++;
     if (enabled) rememberScreenshare(following);
-    else save(undefined);
+    else {
+        pauseRetention();
+        save(undefined);
+    }
 }
 
 export function stopRetainedStream(streamKey: string) {
+    pauseRetention(streamKey);
     const [, , channelId, ownerId] = streamKey.split(":");
     if (ownerId === UserStore.getCurrentUser().id && channelId === SelectedChannelStore.getVoiceChannelId()
         && RTCConnectionStore.isConnected()) {
@@ -138,6 +194,7 @@ export function stopRetainedStream(streamKey: string) {
 
 export function voiceChannelSelected({ channelId, currentVoiceChannelId }: { channelId: string | null; currentVoiceChannelId?: string | null; }) {
     if (channelId === currentVoiceChannelId) return;
+    pauseRetention();
     cancellation++;
     if (attemptedChannel !== SelectedChannelStore.getVoiceChannelId()) attemptedChannel = undefined;
     queueResume();
@@ -147,17 +204,21 @@ export function canResumeInChannel(channelId: string | undefined) {
     return resumingChannel === undefined || running && settings.plain.retainScreenshare
         && resumeCancellation === cancellation
         && channelId === resumingChannel && channelId === SelectedChannelStore.getVoiceChannelId()
-        && retained?.userId === UserStore.getCurrentUser().id;
+        && retained?.userId === UserStore.getCurrentUser().id
+        && Date.now() - (retained.lastActiveAt ?? 0) < settings.plain.retainScreenshareTimeout * 60_000;
 }
 
 export function queueResume() {
-    FluxDispatcher.wait(() => { void resumeScreenshare(); });
+    FluxDispatcher.wait(() => {
+        if (heartbeatChannel !== undefined && heartbeatChannel !== SelectedChannelStore.getVoiceChannelId()) pauseRetention();
+        void resumeScreenshare();
+    });
 }
 
 async function resumeScreenshare() {
     if (!running || !settings.plain.retainScreenshare || !retained || !RTCConnectionStore.isConnected()) return;
     const channelId = SelectedChannelStore.getVoiceChannelId();
-    if (!channelId || RTCConnectionStore.getChannelId() !== channelId || attemptedChannel === channelId || resumingChannel !== undefined) return;
+    if (!channelId || RTCConnectionStore.getChannelId() !== channelId) return;
     if (retained.userId !== UserStore.getCurrentUser().id) return;
     const channel = ChannelStore.getChannel(channelId);
     if (!channel || channel.guild_id !== retained.guildId) {
@@ -165,7 +226,15 @@ async function resumeScreenshare() {
         return;
     }
     const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
-    if (stream?.channelId === channelId && MediaEngineStore.getGoLiveSource() != null) return;
+    if (stream?.channelId === channelId && MediaEngineStore.getGoLiveSource() != null) {
+        startHeartbeat(channelId);
+        return;
+    }
+    if (Date.now() - (retained.lastActiveAt ?? 0) >= settings.plain.retainScreenshareTimeout * 60_000) {
+        save(undefined);
+        return;
+    }
+    if (attemptedChannel === channelId || resumingChannel !== undefined) return;
     attemptedChannel = channelId;
     if (channel.isGuildStageVoice() || !PermissionStore.can(PermissionsBits.STREAM, channel)) return;
     const saved = retained;
