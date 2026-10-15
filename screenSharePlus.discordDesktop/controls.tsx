@@ -17,10 +17,10 @@ interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
-const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview"] satisfies Array<keyof typeof settings.def>;
+const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview", "retainScreenshare"] satisfies Array<keyof typeof settings.def>;
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
-    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview } = settings.use(KEYS);
+    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview, retainScreenshare } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
@@ -28,6 +28,13 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
+            <Menu.MenuCheckboxItem
+                id="vc-screenshare-plus-retain"
+                label="Retain Screenshare"
+                subtext="Resume in the same server after switching voice channels, crashing, or reloading. Stop Sharing clears the saved source."
+                checked={retainScreenshare}
+                action={() => { settings.store.retainScreenshare = !retainScreenshare; }}
+            />
             <Menu.MenuItem id="vc-screenshare-plus-capture" label="Capture API" subtext="Applies immediately.">
                 {settings.def.captureApi.options.map(({ label, value }) => (
                     <Menu.MenuRadioItem

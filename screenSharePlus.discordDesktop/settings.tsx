@@ -15,6 +15,12 @@ export type CaptureApi = "wgc" | "dxgi";
 export type Degradation = "disabled" | "balanced" | "framerate" | "resolution";
 
 export const settings = definePluginSettings({
+    retainScreenshare: {
+        type: OptionType.BOOLEAN,
+        description: "Resume your last screenshare when joining another voice channel in the same server, including after a crash or reload.",
+        default: false,
+        onChange(value: boolean) { ScreenSharePlus.onRetainChange(value); }
+    },
     captureApi: {
         type: OptionType.SELECT,
         description: "Windows API Discord uses to capture your screen.",

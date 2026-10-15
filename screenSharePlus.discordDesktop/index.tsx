@@ -12,6 +12,7 @@ import { findByPropsLazy, findStoreLazy } from "@webpack";
 import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
+import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, voiceChannelSelected } from "./retain";
 import { settings } from "./settings";
 
 interface StreamBitrate {
@@ -44,6 +45,10 @@ interface StreamStartEvent {
     type: "STREAM_START";
     sourceId?: string;
     sourceName?: string;
+    guildId?: string | null;
+    channelId?: string;
+    sound?: boolean;
+    previewDisabled?: boolean;
     [key: string]: unknown;
 }
 
@@ -72,12 +77,13 @@ interface PreviewProps {
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const logger = new Logger("ScreenSharePlus");
-const SOURCE_ID = "screen:vc-screenshare-plus";
-const SOURCE_NAME = "Monitor under mouse";
+const SOURCE_ID = FOLLOW_SOURCE_ID;
+const SOURCE_NAME = FOLLOW_SOURCE_NAME;
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
 const VideoStreamStore: { getStreamId(userId: string, guildId: string | null, context: string): string | undefined; } = findStoreLazy("VideoStreamStore");
 
 let following = false;
+let followingChannelId: string | undefined;
 let generation = 0;
 let displayId: string | undefined;
 let sourceId: string | undefined;
@@ -95,6 +101,7 @@ let previewRecovery = false;
 
 function stopFollowing() {
     following = false;
+    followingChannelId = undefined;
     generation++;
     displayId = undefined;
     sourceId = undefined;
@@ -399,9 +406,13 @@ export default definePlugin({
     start() {
         void Native.removeLegacyCapture();
         if (settings.store.fadeTransitions) void Native.warmCompositor();
+        void startRetention(following);
     },
 
-    stop: stopFollowing,
+    stop() {
+        stopRetention();
+        stopFollowing();
+    },
 
     CaptureMenu,
 
@@ -504,7 +515,20 @@ export default definePlugin({
     },
 
     flux: {
+        STREAM_START(event: StreamStartEvent) {
+            if (following) followingChannelId = event.channelId;
+            rememberScreenshare(following, event);
+        },
+        STREAM_UPDATE_SETTINGS() {
+            rememberScreenshare(following);
+        },
+        VOICE_CHANNEL_SELECT: voiceChannelSelected,
+        VOICE_STATE_UPDATES: queueResume,
+        RTC_CONNECTION_STATE({ context, state }: { context: string; state: string; }) {
+            if (context === "default" && state === "RTC_CONNECTED") queueResume();
+        },
         MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings }: SourceEvent) {
+            if (settings?.desktopSettings != null) rememberScreenshare(following && settings.desktopSettings.sourceId === sourceId);
             if (!following) return;
             if (settings?.qualityOptions != null) scheduleSync();
             const id = settings?.desktopSettings?.sourceId;
@@ -521,12 +545,26 @@ export default definePlugin({
             }
         },
         STREAM_STOP({ streamKey }: { streamKey: string; }) {
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
+            stopRetainedStream(streamKey);
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)
+                && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
         },
         STREAM_DELETE({ streamKey }: { streamKey: string; }) {
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)
+                && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
+            queueResume();
         },
-        LOGOUT: stopFollowing
+        LOGOUT() {
+            stopRetention();
+            stopFollowing();
+        },
+        CONNECTION_OPEN() {
+            void startRetention(following);
+        }
+    },
+
+    onRetainChange(enabled: boolean) {
+        changeRetention(enabled, following);
     },
 
     onCaptureApiChange: recapture,
@@ -542,6 +580,7 @@ export default definePlugin({
     },
 
     startStream(event: StreamStartEvent) {
+        if (!canResumeInChannel(event.channelId)) return;
         if (event.sourceName === SOURCE_NAME && (!following || event.sourceId !== sourceId
             || displayId === undefined || settings.plain.ignoredMonitors.includes(displayId))) return;
         return FluxDispatcher.dispatch(event);
