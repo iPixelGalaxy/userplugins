@@ -96,13 +96,12 @@ export async function startCompositor(monitor: CaptureRegion, width: number, hei
     const ready = new Promise<string>((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
     const readyTimeout = setTimeout(() => close(), 15_000);
 
-    function close() {
+    function close(error = new Error("The capture helper stopped.")) {
         clearTimeout(readyTimeout);
         if (!alive) return;
         alive = false;
         lines.close();
         if (child.exitCode === null && !child.killed) child.kill();
-        const error = new Error("The capture helper stopped.");
         readyReject(error);
         for (const request of pending.values()) {
             clearTimeout(request.timeout);
@@ -126,11 +125,15 @@ export async function startCompositor(monitor: CaptureRegion, width: number, hei
                 clearTimeout(request.timeout);
                 if (packet.type === "updated") request.resolve();
                 else request.reject(new Error("The capture helper could not switch monitors."));
-            } else if (packet.type === "error" && packet.sequence === 0) close();
+            } else if (packet.type === "error" && packet.sequence === 0) {
+                const message = typeof packet.message === "string" && packet.message.length <= 512
+                    ? packet.message : "The capture helper failed to start.";
+                close(new Error(message));
+            }
         }
     });
-    child.on("error", close);
-    child.on("exit", close);
+    child.on("error", error => close(error));
+    child.on("exit", () => close());
 
     try {
         const sourceId = await ready;

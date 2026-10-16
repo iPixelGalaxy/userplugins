@@ -85,6 +85,7 @@ public static class Gpu {
     public delegate int CreateForMonitor(IntPtr self, IntPtr monitor, ref Guid iid, out IntPtr item);
     public delegate int RequestAccessAsync(IntPtr self, int kind, out IntPtr operation);
     public delegate int GetAsyncStatus(IntPtr self, out int status);
+    public delegate int GetAsyncResults(IntPtr self, out int result);
 
     public static readonly Guid Texture2DId = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
 
@@ -112,6 +113,9 @@ public static class Gpu {
                 Check(Slot<GetAsyncStatus>(asyncInfo, 7)(asyncInfo, out status), "Waiting for capture access");
                 if (status == 0) Thread.Sleep(10);
             } while (status == 0);
+            int access;
+            Check(Slot<GetAsyncResults>(operation, 11)(operation, out access), "Reading capture access");
+            if (access != 4) throw new InvalidOperationException("Windows did not grant borderless capture access.");
         } finally {
             Release(ref asyncInfo);
             Release(ref operation);
@@ -516,7 +520,12 @@ public sealed class CaptureWindow : Form {
     [STAThread] public static void Main(string[] args) {
         Gpu.SetProcessDpiAwarenessContext(new IntPtr(-4));
         Gpu.timeBeginPeriod(1);
-        try { Gpu.RequestBorderlessCaptureAccess(); } catch { }
+        try { Gpu.RequestBorderlessCaptureAccess(); }
+        catch (Exception error) {
+            Console.WriteLine("ScreenSharePlus:" + Serializer.Serialize(new { type = "error", sequence = 0, message = error.Message }));
+            Console.Out.Flush();
+            return;
+        }
         CaptureCommand configuration = Serializer.Deserialize<CaptureCommand>(Encoding.UTF8.GetString(Convert.FromBase64String(args[0])));
         Application.Run(new CaptureWindow(configuration));
     }

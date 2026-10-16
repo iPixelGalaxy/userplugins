@@ -112,7 +112,7 @@ export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknow
         const monitor = monitors.find(monitor => monitor.id === displayId);
         if (!monitor) return { success: false, error: "The selected monitor is ignored or unavailable." };
         const { width, height } = canvasSize(monitors, resolution);
-        const started = await startCompositor(monitor, width, height, frameRate, 250);
+        const started = await startCompositor(monitor, width, height, frameRate, 500);
         if (generation !== compositorGeneration) {
             started.close();
             return { success: false, error: "Monitor fade preparation was cancelled." };
@@ -120,8 +120,8 @@ export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknow
         if (compositor) retireCompositor(compositor);
         compositor = started;
         return { success: true, sourceId: started.sourceId };
-    } catch {
-        return { success: false, error: "Could not start the monitor fade helper." };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Could not start the monitor fade helper." };
     }
 }
 

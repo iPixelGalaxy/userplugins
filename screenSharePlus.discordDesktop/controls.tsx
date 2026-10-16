@@ -81,7 +81,7 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
             <Menu.MenuCheckboxItem
                 id="vc-screenshare-plus-fade"
                 label="Fade between monitors"
-                subtext="Applies to Monitor under mouse. Viewers see the fade; nothing appears on your screen."
+                subtext="Applies to Monitor under mouse. If Windows denies borderless capture, switches directly without a fade."
                 checked={fadeTransitions}
                 action={() => { settings.store.fadeTransitions = !fadeTransitions; }}
             />
