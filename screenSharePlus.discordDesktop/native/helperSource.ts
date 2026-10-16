@@ -83,6 +83,8 @@ public static class Gpu {
     public delegate int GetInterface(IntPtr self, ref Guid iid, out IntPtr result);
     public delegate void GetTextureDesc(IntPtr self, out TextureDesc desc);
     public delegate int CreateForMonitor(IntPtr self, IntPtr monitor, ref Guid iid, out IntPtr item);
+    public delegate int RequestAccessAsync(IntPtr self, int kind, out IntPtr operation);
+    public delegate int GetAsyncStatus(IntPtr self, out int status);
 
     public static readonly Guid Texture2DId = new Guid("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
 
@@ -93,6 +95,29 @@ public static class Gpu {
 
     public static void Check(int result, string action) {
         if (result < 0) throw new InvalidOperationException(action + " failed (0x" + result.ToString("X8") + ").");
+    }
+
+    public static void RequestBorderlessCaptureAccess() {
+        string className = "Windows.Graphics.Capture.GraphicsCaptureAccess";
+        IntPtr name = IntPtr.Zero, factory = IntPtr.Zero, operation = IntPtr.Zero, asyncInfo = IntPtr.Zero;
+        try {
+            Check(WindowsCreateString(className, className.Length, out name), "Naming the capture access API");
+            Guid staticsId = new Guid("743ed370-06ec-5040-a58a-901f0f757095");
+            Check(RoGetActivationFactory(name, ref staticsId, out factory), "Opening the capture access API");
+            Check(Slot<RequestAccessAsync>(factory, 6)(factory, 0, out operation), "Requesting borderless capture access");
+            Guid asyncInfoId = new Guid("00000036-0000-0000-C000-000000000046");
+            Check(Marshal.QueryInterface(operation, ref asyncInfoId, out asyncInfo), "Reading the capture access request");
+            int status;
+            do {
+                Check(Slot<GetAsyncStatus>(asyncInfo, 7)(asyncInfo, out status), "Waiting for capture access");
+                if (status == 0) Thread.Sleep(10);
+            } while (status == 0);
+        } finally {
+            Release(ref asyncInfo);
+            Release(ref operation);
+            Release(ref factory);
+            if (name != IntPtr.Zero) WindowsDeleteString(name);
+        }
     }
 
     public static void Release(ref IntPtr target) {
@@ -491,6 +516,7 @@ public sealed class CaptureWindow : Form {
     [STAThread] public static void Main(string[] args) {
         Gpu.SetProcessDpiAwarenessContext(new IntPtr(-4));
         Gpu.timeBeginPeriod(1);
+        try { Gpu.RequestBorderlessCaptureAccess(); } catch { }
         CaptureCommand configuration = Serializer.Deserialize<CaptureCommand>(Encoding.UTF8.GetString(Convert.FromBase64String(args[0])));
         Application.Run(new CaptureWindow(configuration));
     }
