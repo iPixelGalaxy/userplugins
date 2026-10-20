@@ -316,17 +316,10 @@ export default definePlugin({
         },
         {
             find: "lastOverrideCodecDenylist.length",
-            group: true,
-            replacement: [
-                {
-                    match: /getCodecCapabilities\((\i)=>\{/,
-                    replace: "$&const vcScreenSharePlusCodecs=$1;"
-                },
-                {
-                    match: /let (\i)=[^;]{1,300}?,\i=this\.lastOverrideCodecDenylist\.length>0;/,
-                    replace: "$&$1=$self.compatibleCodecs($1,vcScreenSharePlusCodecs,this.context);"
-                }
-            ]
+            replacement: {
+                match: /let (\i)=\i\((\i)\),\i=this\.lastOverrideCodecDenylist\.length>0;/,
+                replace: "$&$1=$self.compatibleCodecs($1,$2,this.context);"
+            }
         },
         {
             find: "desktopDegradationPreference=",
