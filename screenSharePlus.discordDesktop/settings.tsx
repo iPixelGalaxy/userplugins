@@ -8,6 +8,8 @@ import { definePluginSettings } from "@api/Settings";
 import { OptionType } from "@utils/types";
 
 import ScreenSharePlus from "./index";
+import { isIgnoredMonitor, monitorKey } from "./monitors";
+import type { Monitor } from "./native";
 
 const ignoredMonitors: string[] = [];
 
@@ -15,6 +17,12 @@ export type CaptureApi = "wgc" | "dxgi";
 export type Degradation = "disabled" | "balanced" | "framerate" | "resolution";
 
 export const settings = definePluginSettings({
+    mobileCompatibility: {
+        type: OptionType.BOOLEAN,
+        description: "Use H.264 or VP8 for screen sharing, including when another plugin disables these codecs. Applies to new shares.",
+        default: true,
+        hidden: true
+    },
     retainScreenshare: {
         type: OptionType.BOOLEAN,
         description: "Resume your last screenshare when joining another voice channel in the same server, including after a crash or reload.",
@@ -89,3 +97,13 @@ export const settings = definePluginSettings({
         onChange() { ScreenSharePlus.onIgnoredMonitorsChange(); }
     }
 });
+
+export function rememberIgnoredMonitors(monitors: Monitor[]) {
+    const ignored = settings.store.ignoredMonitors;
+    const remembered = [...new Set([
+        ...ignored.filter(key => !monitors.some(monitor => isIgnoredMonitor(monitor, [key], monitors))),
+        ...monitors.filter(monitor => isIgnoredMonitor(monitor, ignored, monitors)).map(monitorKey)
+    ])];
+    if (remembered.length !== ignored.length || remembered.some(key => !ignored.includes(key)))
+        settings.store.ignoredMonitors = remembered;
+}

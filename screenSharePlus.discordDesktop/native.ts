@@ -10,6 +10,7 @@ import { readdir, rm } from "fs/promises";
 import { join } from "path";
 import { promisify } from "util";
 
+import { isIgnoredList, isIgnoredMonitor, type MonitorIdentity } from "./monitors";
 import { captureDirectory, type Compositor, prepareHelper, startCompositor } from "./native/compositor";
 import { closeIdentification, showIdentification } from "./native/identify";
 
@@ -31,8 +32,7 @@ interface MonitorSource {
     name: string;
 }
 
-export interface Monitor {
-    id: string;
+export interface Monitor extends MonitorIdentity {
     name: string;
 }
 
@@ -48,7 +48,9 @@ interface CaptureMonitor {
 }
 
 function captureMonitors(ignored: string[]): CaptureMonitor[] {
-    return screen.getAllDisplays().filter((display: Display) => !ignored.includes(String(display.id))).map((display: Display) => {
+    const displays = screen.getAllDisplays();
+    const identities = displays.map(monitorIdentity);
+    return displays.filter((display: Display) => !isIgnoredMonitor(monitorIdentity(display), ignored, identities)).map((display: Display) => {
         const bounds = screen.dipToScreenRect(null, display.bounds);
         return { id: String(display.id), x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
     });
@@ -85,8 +87,8 @@ function canvasSize(monitors: CaptureMonitor[], resolution: number) {
     return { width: Math.max(2, Math.floor(largest.width * scale) & ~1), height: Math.max(2, Math.floor(largest.height * scale) & ~1) };
 }
 
-function isIgnoredList(value: unknown): value is string[] {
-    return Array.isArray(value) && value.length <= 64 && value.every(isDisplayId);
+function monitorIdentity(display: Display): MonitorIdentity {
+    return { id: String(display.id), label: display.label, x: display.bounds.x, y: display.bounds.y };
 }
 
 export function warmCompositor(_: IpcMainInvokeEvent) {
@@ -219,12 +221,12 @@ export async function getMonitors(_: IpcMainInvokeEvent): Promise<
         const displays = screen.getAllDisplays();
         return {
             success: true,
-            monitors: sources.filter((source: MonitorSource) => isDisplayId(source.displayId)).map((source: MonitorSource) => {
-                const display = displays.find((display: Display) => String(display.id) === source.displayId);
-                return {
-                    id: source.displayId,
-                    name: display?.label ? `${source.name} (${display.label})` : source.name
-                };
+            monitors: sources.flatMap((source: MonitorSource) => {
+                const display = displays.find(display => String(display.id) === source.displayId);
+                return display ? [{
+                    ...monitorIdentity(display),
+                    name: display.label ? `${source.name} (${display.label})` : source.name
+                }] : [];
             })
         };
     } catch {
@@ -262,7 +264,7 @@ export async function getCursorSource(
     if (previousDisplayId !== undefined && !isDisplayId(previousDisplayId))
         return { success: false, error: "Invalid monitor identifier." };
 
-    if (!Array.isArray(ignoredDisplayIds) || ignoredDisplayIds.length > 64 || !ignoredDisplayIds.every(isDisplayId))
+    if (!isIgnoredList(ignoredDisplayIds))
         return { success: false, error: "Invalid ignored monitor list." };
 
     if (typeof includePreview !== "boolean")
@@ -273,8 +275,10 @@ export async function getCursorSource(
 
     try {
         let display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-        if (ignoredDisplayIds.includes(String(display.id))) {
-            const allowed = screen.getAllDisplays().filter((display: Display) => !ignoredDisplayIds.includes(String(display.id)));
+        const displays = screen.getAllDisplays();
+        const identities = displays.map(monitorIdentity);
+        if (isIgnoredMonitor(monitorIdentity(display), ignoredDisplayIds, identities)) {
+            const allowed = displays.filter((display: Display) => !isIgnoredMonitor(monitorIdentity(display), ignoredDisplayIds, identities));
             const fallback = allowed.find((display: Display) => String(display.id) === previousDisplayId) ?? allowed[0];
             if (!fallback)
                 return { success: false, error: "Every monitor is ignored. Allow at least one monitor before sharing." };

@@ -7,13 +7,13 @@
 import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
-import type { MediaEngineConnection } from "@vencord/discord-types";
+import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
 import { findByPropsLazy, findStoreLazy } from "@webpack";
 import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
 import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
-import { settings } from "./settings";
+import { rememberIgnoredMonitors, settings } from "./settings";
 
 interface StreamBitrate {
     bitrateMin: number;
@@ -94,6 +94,7 @@ let videoSwitchSourceId: string | undefined;
 let compositorSourceId: string | undefined;
 let compositorKey: string | undefined;
 let audioSourceId: string | undefined;
+let preparedIgnoredMonitors: string[] | undefined;
 let syncing = false;
 let syncQueued = false;
 let syncTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -109,6 +110,7 @@ function stopFollowing() {
     compositorSourceId = undefined;
     compositorKey = undefined;
     audioSourceId = undefined;
+    preparedIgnoredMonitors = undefined;
     syncQueued = false;
     previewRecovery = false;
     void Native.stopCompositor().catch((error: unknown) => logger.warn("Could not close the monitor fade helper.", error));
@@ -218,7 +220,6 @@ async function followCursor() {
         }
         if (result.sourceId === null) return;
         if (MediaEngineStore.getGoLiveSource()?.desktopSource == null) {
-            stopFollowing();
             return;
         }
 
@@ -292,15 +293,40 @@ export default definePlugin({
             find: "this.getDefaultGoliveQuality()",
             replacement: {
                 match: /(?<=applyQualityConstraints\(\i,\i\)\{let \i=)this\.getQuality\(\i\)/,
-                replace: "$self.overrideBitrate($&,this.isStreamContext,this.goliveMaxQuality)"
+                replace: "$self.overrideBitrate($&,this.isStreamContext)"
             }
         },
         {
             find: "}setDesktopEncodingOptions(",
-            replacement: {
-                match: /null==(\i)&&\(\i=.{0,100}?\);(?=let \i=\{width:)/,
-                replace: "$&$1=$self.maximumBitrate($1);"
-            }
+            group: true,
+            replacement: [
+                {
+                    match: /null==(\i)&&\(\i=.{0,100}?\);(?=let \i=\{width:)/,
+                    replace: "$&$1=$self.maximumBitrate($1);"
+                },
+                {
+                    match: /setDesktopEncodingOptions\(\i,\i,\i\)\{/,
+                    replace: '$&if(this.context==="stream"&&this.keyframeInterval===0)this.setKeyframeInterval(2000);'
+                },
+                {
+                    match: /setKeyframeInterval\((\i)\)\{/,
+                    replace: '$&if(this.context==="stream"&&$1===0)$1=2000;'
+                }
+            ]
+        },
+        {
+            find: "lastOverrideCodecDenylist.length",
+            group: true,
+            replacement: [
+                {
+                    match: /getCodecCapabilities\((\i)=>\{/,
+                    replace: "$&const vcScreenSharePlusCodecs=$1;"
+                },
+                {
+                    match: /let (\i)=[^;]{1,300}?,\i=this\.lastOverrideCodecDenylist\.length>0;/,
+                    replace: "$&$1=$self.compatibleCodecs($1,vcScreenSharePlusCodecs,this.context);"
+                }
+            ]
         },
         {
             find: "desktopDegradationPreference=",
@@ -407,6 +433,9 @@ export default definePlugin({
         void Native.removeLegacyCapture();
         if (settings.store.fadeTransitions) void Native.warmCompositor();
         void startRetention(following);
+        void Native.getMonitors().then(result => {
+            if (result.success) rememberIgnoredMonitors(result.monitors);
+        }).catch((error: unknown) => logger.warn("Could not update saved monitor exclusions.", error));
     },
 
     stop() {
@@ -441,6 +470,13 @@ export default definePlugin({
 
     allowSingleCpuCopy(enabled: boolean, context: string, participantType: string) {
         return enabled && (context !== "stream" || participantType !== "streamer");
+    },
+
+    compatibleCodecs(codecs: CodecInfo[], capabilities: string, context: string) {
+        if (context !== "stream" || !settings.store.mobileCompatibility) return codecs;
+        const available: { codec: string; encode: boolean; }[] = JSON.parse(capabilities);
+        return codecs.map(codec => ({ ...codec, encode: (codec.name === "H264" || codec.name === "VP8")
+            && available.some(capability => capability.codec === codec.name && capability.encode) }));
     },
 
     useGraphicsCapture(supported: boolean) {
@@ -481,17 +517,14 @@ export default definePlugin({
         return id === compositorSourceId && audioSourceId !== undefined ? SoundshareStore.getPidFromDesktopSource(audioSourceId) : pid;
     },
 
-    // Discord scales stream bitrate down to the viewer's player size and starts the encoder at 0.6 Mbps.
-    // Use the full stream budget instead and start near it. Static screens send very little, so WebRTC's
-    // bandwidth estimate collapses toward the minimum; the floor keeps room for sudden motion.
-    overrideBitrate<T extends StreamBitrate>(quality: T, streaming: boolean, full: StreamBitrate = quality): T {
+    overrideBitrate<T extends StreamBitrate>(quality: T, streaming: boolean): T {
         if (!streaming) return quality;
         const { bitrate, lockBitrate } = settings.store;
-        const maximum = bitrate * 1_000_000 || Math.max(quality.bitrateMax, full.bitrateMax);
+        const maximum = Math.min(quality.bitrateMax, bitrate * 1_000_000 || quality.bitrateMax);
         return { ...quality,
-            bitrateMin: lockBitrate ? maximum : Math.min(maximum, Math.max(full.bitrateMin, Math.round(maximum / 4))),
+            bitrateMin: lockBitrate ? maximum : Math.min(quality.bitrateMin, maximum),
             bitrateMax: maximum,
-            bitrateTarget: bitrate === 0 && !lockBitrate ? Math.max(full.bitrateTarget ?? 0, Math.round(maximum / 2)) : maximum
+            bitrateTarget: lockBitrate ? maximum : quality.bitrateTarget === undefined ? undefined : Math.min(quality.bitrateTarget, maximum)
         };
     },
 
@@ -531,16 +564,19 @@ export default definePlugin({
         },
         WINDOW_UNLOAD() { pauseRetention(); },
         MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings }: SourceEvent) {
+            if (settings !== null && settings.context !== "stream") return;
+            if (settings === null && ApplicationStreamingStore.getCurrentUserActiveStream()) return;
             if (settings?.desktopSettings != null) rememberScreenshare(following && settings.desktopSettings.sourceId === sourceId);
             else if (settings === null || settings.context === "stream") pauseRetention();
-            if (!following) return;
+            if (!following && compositorSourceId === undefined) return;
             if (settings?.qualityOptions != null) scheduleSync();
             const id = settings?.desktopSettings?.sourceId;
-            if (settings?.context !== "stream" || id === undefined || id.split(":")[0] !== sourceId?.split(":")[0]
+            if (id === undefined || id.split(":")[0] !== sourceId?.split(":")[0]
                 || id.split(":")[1] !== sourceId?.split(":")[1]) {
                 stopFollowing();
                 return;
             }
+            if (!following) return;
             if (intervalId === undefined)
                 intervalId = setInterval(followCursor, 50);
             if (startTimeout !== undefined) {
@@ -589,7 +625,7 @@ export default definePlugin({
     startStream(event: StreamStartEvent) {
         if (!canResumeInChannel(event.channelId)) return;
         if (event.sourceName === SOURCE_NAME && (!following || event.sourceId !== sourceId
-            || displayId === undefined || settings.plain.ignoredMonitors.includes(displayId))) return;
+            || displayId === undefined || preparedIgnoredMonitors !== settings.plain.ignoredMonitors)) return;
         return FluxDispatcher.dispatch(event);
     },
 
@@ -653,6 +689,7 @@ export default definePlugin({
             if (result.sourceId === null) return null;
 
             following = true;
+            preparedIgnoredMonitors = ignoredMonitors;
             displayId = result.displayId;
             sourceId = result.sourceId;
             startTimeout = setTimeout(() => {

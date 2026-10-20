@@ -10,8 +10,9 @@ import type { PluginNative } from "@utils/types";
 import { findComponentByCodeLazy } from "@webpack";
 import { Menu, React, useEffect } from "@webpack/common";
 
+import { isIgnoredMonitor, monitorKey } from "./monitors";
 import type { Monitor } from "./native";
-import { settings } from "./settings";
+import { rememberIgnoredMonitors, settings } from "./settings";
 
 interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
     MenuComponent: typeof Menu.Menu;
@@ -19,14 +20,14 @@ interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const RetainIndicator = findComponentByCodeLazy("displayOnly:!0", 'usageVariant:"indicator"');
-const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview", "retainScreenshare", "retainScreenshareTimeout"] satisfies Array<keyof typeof settings.def>;
+const KEYS = ["captureApi", "fadeTransitions", "ignoredMonitors", "bitrate", "lockBitrate", "degradation", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "mobileCompatibility"] satisfies Array<keyof typeof settings.def>;
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
-    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview, retainScreenshare, retainScreenshareTimeout } = settings.use(KEYS);
+    const { captureApi, fadeTransitions, ignoredMonitors, bitrate, lockBitrate, degradation, keepPreview, retainScreenshare, retainScreenshareTimeout, mobileCompatibility } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
-    const allowed = monitors.filter((monitor: Monitor) => !ignoredMonitors.includes(monitor.id)).length;
+    const allowed = monitors.filter((monitor: Monitor) => !isIgnoredMonitor(monitor, ignoredMonitors, monitors)).length;
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
@@ -79,6 +80,13 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
                 ))}
             </Menu.MenuItem>
             <Menu.MenuCheckboxItem
+                id="vc-screenshare-plus-mobile-compatibility"
+                label="Mobile compatibility"
+                subtext="Uses H.264 or VP8, overriding codec exclusions. Restart sharing after changing this."
+                checked={mobileCompatibility}
+                action={() => { settings.store.mobileCompatibility = !settings.store.mobileCompatibility; }}
+            />
+            <Menu.MenuCheckboxItem
                 id="vc-screenshare-plus-fade"
                 label="Fade between monitors"
                 subtext="Applies to Monitor under mouse. If Windows denies borderless capture, switches directly without a fade."
@@ -93,13 +101,15 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
                             key={monitor.id}
                             id={`vc-screenshare-plus-ignore-${monitor.id}`}
                             label={monitor.name}
-                            subtext={allowed === 1 && !ignoredMonitors.includes(monitor.id) ? "Keep at least one monitor allowed." : "Hover to identify this monitor."}
-                            checked={ignoredMonitors.includes(monitor.id)}
+                            subtext={allowed === 1 && !isIgnoredMonitor(monitor, ignoredMonitors, monitors) ? "Keep at least one monitor allowed." : "Hover to identify this monitor."}
+                            checked={isIgnoredMonitor(monitor, ignoredMonitors, monitors)}
                             action={() => {
-                                if (allowed === 1 && !ignoredMonitors.includes(monitor.id)) return;
-                                settings.store.ignoredMonitors = ignoredMonitors.includes(monitor.id)
-                                    ? ignoredMonitors.filter((id: string) => id !== monitor.id)
-                                    : [...ignoredMonitors, monitor.id];
+                                rememberIgnoredMonitors(monitors);
+                                const current = settings.store.ignoredMonitors;
+                                const key = monitorKey(monitor);
+                                if (current.includes(key)) settings.store.ignoredMonitors = current.filter(id => id !== key);
+                                else if (monitors.some(other => other.id !== monitor.id && !isIgnoredMonitor(other, current, monitors)))
+                                    settings.store.ignoredMonitors = [...current, key];
                             }}
                         />
                     ))}
