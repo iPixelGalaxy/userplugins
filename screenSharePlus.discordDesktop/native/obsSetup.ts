@@ -48,12 +48,12 @@ export function obsPath(relative: string) {
 export async function installObs(signal: AbortSignal, report: ReportProgress) {
     await mkdir(root, { recursive: true });
     const marker = obsPath("ready");
-    report({ phase: "download", downloaded: 0, totalBytes: ARCHIVE_BYTES, status: "Downloading capture libraries." });
     const ready = await readFile(marker, "utf8").catch(() => "");
     if (ready === OBS_SHA256) {
-        report({ downloaded: ARCHIVE_BYTES, phase: "configure", status: "Capture libraries are already installed." });
+        report({ downloaded: ARCHIVE_BYTES, totalBytes: ARCHIVE_BYTES, phase: "configure", status: "Capture libraries are already installed." });
         return;
     }
+    report({ phase: "download", downloaded: 0, totalBytes: ARCHIVE_BYTES, status: "Downloading capture libraries." });
 
     let url = DOWNLOAD;
     let response: Response | undefined;

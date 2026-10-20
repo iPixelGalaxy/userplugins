@@ -9,10 +9,11 @@ import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
 import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
-import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
+import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, SelectedChannelStore, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
 import { openPreparationProgress } from "./progress";
+import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
 import { rememberIgnoredMonitors, settings } from "./settings";
 
 interface StreamBitrate {
@@ -45,16 +46,21 @@ interface StreamStartEvent {
     type: "STREAM_START";
     sourceId?: string;
     sourceName?: string;
+    guildId?: string | null;
+    channelId?: string;
+    sound?: boolean;
+    previewDisabled?: boolean;
     [key: string]: unknown;
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const logger = new Logger("ScreenSharePlus");
-const SOURCE_ID = "screen:vc-screenshare-plus";
-const SOURCE_NAME = "Monitor under mouse";
+const SOURCE_ID = FOLLOW_SOURCE_ID;
+const SOURCE_NAME = FOLLOW_SOURCE_NAME;
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
 
 let following = false;
+let captureChannelId: string | undefined;
 let generation = 0;
 let displayId: string | undefined;
 let sourceId: string | undefined;
@@ -68,6 +74,7 @@ let preparedIgnoredMonitors: string[] | undefined;
 
 function stopFollowing() {
     following = false;
+    captureChannelId = undefined;
     generation++;
     displayId = undefined;
     sourceId = undefined;
@@ -279,12 +286,16 @@ export default definePlugin({
 
     start() {
         if (!settings.store.obsCaptureAcknowledged) settings.store.useObsCapture = false;
+        void startRetention(following, audioSourceId);
         void Native.getMonitors().then(result => {
             if (result.success) rememberIgnoredMonitors(result.monitors);
         }).catch((error: unknown) => logger.warn("Could not update saved monitor exclusions.", error));
     },
 
-    stop: stopFollowing,
+    stop() {
+        stopRetention();
+        stopFollowing();
+    },
 
     CaptureMenu,
 
@@ -348,10 +359,28 @@ export default definePlugin({
     },
 
     flux: {
+        STREAM_START(event: StreamStartEvent) {
+            captureChannelId = event.channelId;
+            rememberScreenshare(following, event, audioSourceId);
+        },
+        STREAM_UPDATE_SETTINGS() {
+            rememberScreenshare(following, undefined, audioSourceId);
+        },
+        VOICE_CHANNEL_SELECT: voiceChannelSelected,
+        VOICE_STATE_UPDATES: queueResume,
+        RTC_CONNECTION_STATE({ context, state }: { context: string; state: string; }) {
+            if (context !== "default") return;
+            if (state === "RTC_CONNECTED") queueResume();
+            else pauseRetention();
+        },
+        WINDOW_UNLOAD() { pauseRetention(); },
         MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings: sourceSettings }: SourceEvent) {
-            if (!following && compositorSourceId === undefined) return;
             if (sourceSettings !== null && sourceSettings.context !== "stream") return;
             if (sourceSettings === null && ApplicationStreamingStore.getCurrentUserActiveStream()) return;
+            if (sourceSettings?.desktopSettings != null)
+                rememberScreenshare(following && sourceSettings.desktopSettings.sourceId === sourceId, undefined, audioSourceId);
+            else if (sourceSettings === null || sourceSettings.context === "stream") pauseRetention();
+            if (!following && compositorSourceId === undefined) return;
             const id = sourceSettings?.desktopSettings?.sourceId;
             if (id === undefined || id.split(":")[0] !== sourceId?.split(":")[0]
                 || id.split(":")[1] !== sourceId?.split(":")[1]) {
@@ -367,13 +396,30 @@ export default definePlugin({
             }
         },
         STREAM_STOP({ streamKey }: { streamKey: string; }) {
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
+            stopRetainedStream(streamKey);
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)
+                && (captureChannelId === undefined || streamKey.split(":")[2] === captureChannelId)) stopFollowing();
         },
         STREAM_DELETE({ streamKey }: { streamKey: string; }) {
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
+            pauseRetention(streamKey);
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)
+                && (captureChannelId === undefined || streamKey.split(":")[2] === captureChannelId)) stopFollowing();
+            queueResume();
         },
-        LOGOUT: stopFollowing
+        LOGOUT() {
+            stopRetention();
+            stopFollowing();
+        },
+        CONNECTION_OPEN() {
+            void startRetention(following, audioSourceId);
+        }
     },
+
+    onRetainChange(enabled: boolean) {
+        changeRetention(enabled, following, audioSourceId);
+    },
+
+    onRetainTimeoutChange: updateRetentionTimeout,
 
     onIgnoredMonitorsChange() {
         if (!following) return;
@@ -386,6 +432,7 @@ export default definePlugin({
     },
 
     startStream(event: StreamStartEvent) {
+        if (!canResumeInChannel(event.channelId)) return;
         if (event.sourceName === SOURCE_NAME && (!following || event.sourceId !== sourceId
             || displayId === undefined || preparedIgnoredMonitors !== settings.plain.ignoredMonitors)) return;
         return FluxDispatcher.dispatch(event);
@@ -419,6 +466,7 @@ export default definePlugin({
     async prepareSource(source: CaptureSource | number | null) {
         stopFollowing();
         if (typeof source !== "object" || source === null) return source;
+        captureChannelId = SelectedChannelStore.getVoiceChannelId() ?? undefined;
         const followsCursor = source.id === SOURCE_ID;
         if (!followsCursor && (!settings.plain.useObsCapture || !/^(?:screen|window):/.test(source.id))) return source;
         const currentGeneration = generation;

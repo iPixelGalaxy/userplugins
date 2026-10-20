@@ -11,7 +11,7 @@ import { Paragraph } from "@components/Paragraph";
 import { useAwaiter } from "@utils/react";
 import type { PluginNative } from "@utils/types";
 import type { FluxStore } from "@vencord/discord-types";
-import { findStoreLazy } from "@webpack";
+import { findComponentByCodeLazy, findStoreLazy } from "@webpack";
 import { Alerts, ApplicationStreamingStore, MediaEngineStore, Menu, React, showToast, useEffect, UserStore, useStateFromStores } from "@webpack/common";
 
 import { isIgnoredMonitor, monitorKey } from "./monitors";
@@ -35,7 +35,8 @@ interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
-const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "limitFrameRate", "keepPreview", "mobileCompatibility"] satisfies Array<keyof typeof settings.def>;
+const RetainIndicator = findComponentByCodeLazy("displayOnly:!0", 'usageVariant:"indicator"');
+const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "limitFrameRate", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "mobileCompatibility"] satisfies Array<keyof typeof settings.def>;
 const CAPTURE_MODES = [{ label: "Discord capture", value: "discord" as const }, ...settings.def.captureMethod.options];
 const VideoStreamStore = findStoreLazy("VideoStreamStore") as PreviewStore;
 
@@ -75,7 +76,7 @@ const LivePreview = ErrorBoundary.wrap(function LivePreview() {
 }, { noop: true });
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, live, children, ...props }: CaptureMenuProps) {
-    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, limitFrameRate, keepPreview, mobileCompatibility } = settings.use(KEYS);
+    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, limitFrameRate, keepPreview, retainScreenshare, retainScreenshareTimeout, mobileCompatibility } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
@@ -83,6 +84,24 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
+            <Menu.MenuItem
+                id="vc-screenshare-plus-retain"
+                label="Retain Screenshare"
+                subtext={`Rejoin within ${retainScreenshareTimeout} ${retainScreenshareTimeout === 1 ? "minute" : "minutes"} to resume in the same server. Stop Sharing clears the saved source.`}
+                icon={RetainIndicator}
+                iconProps={{ checked: retainScreenshare }}
+                trailingIndicator={{ type: "icon", icon: RetainIndicator, checked: retainScreenshare }}
+                dontCloseOnAction
+                action={() => { settings.store.retainScreenshare = !settings.store.retainScreenshare; }}
+            >
+                <Menu.MenuControlItem
+                    id="vc-screenshare-plus-retain-timeout"
+                    label={`Rejoin timeout: ${retainScreenshareTimeout} ${retainScreenshareTimeout === 1 ? "minute" : "minutes"}`}
+                    control={(props, ref) => <Menu.MenuSliderControl {...props} ref={ref} minValue={1} maxValue={30} value={retainScreenshareTimeout}
+                        renderValue={(value: number) => `${Math.round(value)} ${Math.round(value) === 1 ? "minute" : "minutes"}`}
+                        onChange={(value: number) => { settings.store.retainScreenshareTimeout = Math.round(value); }} />}
+                />
+            </Menu.MenuItem>
             <Menu.MenuItem id="vc-screenshare-plus-capture" label="Capture mode"
                 subtext="Applies when starting a new share. Fade modes use OBS libraries.">
                 {CAPTURE_MODES.map(({ label, value }) => (

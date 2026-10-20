@@ -23,6 +23,21 @@ export const settings = definePluginSettings({
         default: true,
         hidden: true
     },
+    retainScreenshare: {
+        type: OptionType.BOOLEAN,
+        description: "Resume your last screenshare when rejoining voice in the same server, including after a crash or reload.",
+        default: false,
+        onChange(value: boolean) { ScreenSharePlus.onRetainChange(value); }
+    },
+    retainScreenshareTimeout: {
+        type: OptionType.SLIDER,
+        description: "Minutes after leaving voice before your saved screenshare expires.",
+        markers: [1, 5, 10, 15, 30],
+        default: 5,
+        stickToMarkers: false,
+        hidden: true,
+        onChange() { ScreenSharePlus.onRetainTimeoutChange(); }
+    },
     useObsCapture: {
         type: OptionType.BOOLEAN,
         description: "Use OBS libraries for monitor and application capture.",

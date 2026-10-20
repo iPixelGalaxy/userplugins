@@ -114,7 +114,7 @@ export function pauseRetention(streamKey?: string) {
     if (retained) save({ ...retained, lastActiveAt: Date.now() });
 }
 
-export function rememberScreenshare(following: boolean, event?: StreamStart) {
+export function rememberScreenshare(following: boolean, event?: StreamStart, originalSourceId?: string) {
     if (!running || !settings.plain.retainScreenshare) return;
     const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
     const guildId = event ? event.guildId : stream?.guildId;
@@ -123,7 +123,7 @@ export function rememberScreenshare(following: boolean, event?: StreamStart) {
     const metadata = ApplicationStreamingStore.getStreamerActiveStreamMetadata();
     const live = MediaEngineStore.getGoLiveSource();
     if (!event && (metadata === null || live?.desktopSource == null)) return;
-    const sourceId = following ? FOLLOW_SOURCE_ID : event ? event.sourceId : live?.desktopSource?.id;
+    const sourceId = following ? FOLLOW_SOURCE_ID : originalSourceId ?? (event ? event.sourceId : live?.desktopSource?.id);
     if (!sourceId) return;
     const state = ApplicationStreamingSettingsStore.getState();
     save({
@@ -143,7 +143,7 @@ export function rememberScreenshare(following: boolean, event?: StreamStart) {
     startHeartbeat(channelId);
 }
 
-export async function startRetention(following: boolean) {
+export async function startRetention(following: boolean, originalSourceId?: string) {
     running = true;
     const currentRevision = ++revision;
     try {
@@ -154,7 +154,7 @@ export async function startRetention(following: boolean) {
             save(undefined);
             return;
         }
-        rememberScreenshare(following);
+        rememberScreenshare(following, undefined, originalSourceId);
         updateRetentionTimeout();
         queueResume();
     } catch (error) {
@@ -171,10 +171,10 @@ export function stopRetention() {
     attemptedChannel = undefined;
 }
 
-export function changeRetention(enabled: boolean, following: boolean) {
+export function changeRetention(enabled: boolean, following: boolean, originalSourceId?: string) {
     revision++;
     cancellation++;
-    if (enabled) rememberScreenshare(following);
+    if (enabled) rememberScreenshare(following, undefined, originalSourceId);
     else {
         pauseRetention();
         save(undefined);
@@ -249,7 +249,7 @@ async function resumeScreenshare() {
                 && (source.id.startsWith("screen") || (saved.sourcePid !== null
                     ? SoundshareStore.getPidFromDesktopSource(candidate.id) === saved.sourcePid : candidate.name === source.name)));
             if (!available) {
-                if (currentRevision === revision) showToast("ScreenSharePlus could not resume because the previous source is no longer available. Choose a source to share again.");
+                if (currentRevision === revision) showToast({ text: "ScreenSharePlus could not resume because the previous source is no longer available. Choose a source to share again.", variant: "critical" });
                 return;
             }
             source = available;
@@ -257,12 +257,12 @@ async function resumeScreenshare() {
         if (currentRevision !== revision || !canResumeInChannel(channelId)) return;
         const [success, reason] = await startStreamWithSource(source, saved.options);
         if (!success && currentRevision === revision) {
-            showToast("ScreenSharePlus could not resume your screenshare. Choose a source to share again.");
+            showToast({ text: "ScreenSharePlus could not resume your screenshare. Choose a source to share again.", variant: "critical" });
             logger.warn("Could not resume the screenshare.", reason);
         }
     } catch (error) {
         logger.error("Could not resume the screenshare.", error);
-        if (currentRevision === revision) showToast("ScreenSharePlus could not resume your screenshare. Choose a source to share again.");
+        if (currentRevision === revision) showToast({ text: "ScreenSharePlus could not resume your screenshare. Choose a source to share again.", variant: "critical" });
     } finally {
         resumingChannel = undefined;
         if (SelectedChannelStore.getVoiceChannelId() !== channelId) queueResume();
