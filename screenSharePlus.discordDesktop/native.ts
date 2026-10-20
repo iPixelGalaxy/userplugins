@@ -4,17 +4,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { execFile } from "child_process";
 import { desktopCapturer, type DesktopCapturerSource, type Display, type IpcMainInvokeEvent, screen } from "electron";
-import { readdir, rm } from "fs/promises";
-import { join } from "path";
-import { promisify } from "util";
 
 import { isIgnoredList, isIgnoredMonitor, type MonitorIdentity } from "./monitors";
-import { captureDirectory, type Compositor, prepareHelper, startCompositor } from "./native/compositor";
+import { type CaptureMonitor, type Compositor, startCompositor } from "./native/compositor";
 import { closeIdentification, showIdentification } from "./native/identify";
+import { captureDirectory, isCaptureConfigured } from "./native/obsSetup";
 
 let identificationRevision = 0;
+
+export function getCaptureDirectory(_: IpcMainInvokeEvent) {
+    return captureDirectory();
+}
+
+export function isCaptureReady(_: IpcMainInvokeEvent) {
+    return isCaptureConfigured();
+}
 
 export function stopIdentification(_: IpcMainInvokeEvent) {
     identificationRevision++;
@@ -36,16 +41,28 @@ export interface Monitor extends MonitorIdentity {
     name: string;
 }
 
+export interface PreparationProgress {
+    phase: "download" | "configure" | "ready" | "error";
+    downloaded: number;
+    totalBytes: number;
+    completed: number;
+    totalSteps: number;
+    status: string;
+}
+
+let preparationProgress: PreparationProgress = {
+    phase: "download", downloaded: 0, totalBytes: 0, completed: 0, totalSteps: 1, status: "Starting screen share preparation."
+};
+
+export function getPreparationProgress(_: IpcMainInvokeEvent) {
+    return preparationProgress;
+}
+
 let sourceCache: Promise<MonitorSource[]> | undefined;
 let displayLayout: string | undefined;
-
-interface CaptureMonitor {
-    id: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
+let compositor: Compositor | undefined;
+let compositorAbort: AbortController | undefined;
+let compositorGeneration = 0;
 
 function captureMonitors(ignored: string[]): CaptureMonitor[] {
     const displays = screen.getAllDisplays();
@@ -56,107 +73,101 @@ function captureMonitors(ignored: string[]): CaptureMonitor[] {
     });
 }
 
-function isDisplayId(value: unknown): value is string {
-    return typeof value === "string" && /^-?\d{1,20}$/.test(value);
-}
-
-let compositor: Compositor | undefined;
-let compositorGeneration = 0;
-const retiringCompositors = new Set<Compositor>();
-
 function closeCompositor() {
     compositorGeneration++;
+    compositorAbort?.abort();
+    compositorAbort = undefined;
     compositor?.close();
     compositor = undefined;
-    for (const retiring of retiringCompositors) retiring.close();
-    retiringCompositors.clear();
 }
 
-// Keeps the previous helper alive briefly so Discord can switch to the replacement without a gap.
-function retireCompositor(previous: Compositor) {
-    retiringCompositors.add(previous);
-    setTimeout(() => {
-        if (retiringCompositors.delete(previous)) previous.close();
-    }, 500);
-}
-
-function canvasSize(monitors: CaptureMonitor[], resolution: number) {
-    const largest = monitors.reduce((best, monitor) => monitor.width * monitor.height > best.width * best.height ? monitor : best);
-    const shortest = Math.min(largest.width, largest.height);
-    const scale = resolution > 0 && shortest > resolution ? resolution / shortest : 1;
-    return { width: Math.max(2, Math.floor(largest.width * scale) & ~1), height: Math.max(2, Math.floor(largest.height * scale) & ~1) };
+function isDisplayId(value: unknown): value is string {
+    return typeof value === "string" && /^-?\d{1,20}$/.test(value);
 }
 
 function monitorIdentity(display: Display): MonitorIdentity {
     return { id: String(display.id), label: display.label, x: display.bounds.x, y: display.bounds.y };
 }
 
-export function warmCompositor(_: IpcMainInvokeEvent) {
-    if (process.platform === "win32") void prepareHelper().catch(() => undefined);
-}
-
-export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknown, ignored: unknown, frameRate: unknown, resolution: unknown, replace: unknown = false): Promise<
+export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknown, ignored: unknown, frameRate: unknown = 60, captureMethod: unknown = "wgc"): Promise<
     | { success: true; sourceId: string; }
     | { success: false; error: string; }
 > {
-    if (!isDisplayId(displayId) || !isIgnoredList(ignored)) return { success: false, error: "Invalid monitor selection." };
+    const followCursor = isDisplayId(displayId);
+    if ((!followCursor && !(typeof displayId === "string" && /^(?:screen|window):\d{1,20}:\d+$/.test(displayId)))
+        || !isIgnoredList(ignored))
+        return { success: false, error: "Invalid monitor selection." };
     if (typeof frameRate !== "number" || !Number.isInteger(frameRate) || frameRate < 1 || frameRate > 240)
         return { success: false, error: "Invalid capture frame rate." };
-    if (typeof resolution !== "number" || !Number.isInteger(resolution) || resolution < 0 || resolution > 4320)
-        return { success: false, error: "Invalid capture resolution." };
-    if (typeof replace !== "boolean") return { success: false, error: "Invalid capture replacement option." };
-    if (process.platform !== "win32") return { success: false, error: "Monitor fades are only available on Windows." };
-    if (replace) compositorGeneration++;
-    else closeCompositor();
+    if (captureMethod !== "obs" && captureMethod !== "wgc" && captureMethod !== "dxgi")
+        return { success: false, error: "Invalid capture method." };
+    if (process.platform !== "win32" || process.arch !== "x64")
+        return { success: false, error: "Prepared transitions are not available on this platform." };
+    closeCompositor();
     const generation = compositorGeneration;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    compositorAbort = controller;
     try {
-        const monitors = captureMonitors(ignored);
-        const monitor = monitors.find(monitor => monitor.id === displayId);
-        if (!monitor) return { success: false, error: "The selected monitor is ignored or unavailable." };
-        const { width, height } = canvasSize(monitors, resolution);
-        const started = await startCompositor(monitor, width, height, frameRate, 500);
-        if (generation !== compositorGeneration) {
-            started.close();
-            return { success: false, error: "Monitor fade preparation was cancelled." };
+        let monitors = captureMonitors(ignored);
+        let initialId = String(displayId);
+        let windowHandle: string | undefined;
+        if (!followCursor) {
+            const sources = await desktopCapturer.getSources({ types: ["screen", "window"], thumbnailSize: { width: 0, height: 0 } });
+            const source = sources.find((source: DesktopCapturerSource) => source.id === displayId);
+            if (!source) return { success: false, error: "That capture source is no longer available." };
+            if (source.id.startsWith("window:")) {
+                windowHandle = source.id.split(":")[1];
+                initialId = "window";
+                monitors = [];
+            } else {
+                initialId = source.display_id;
+                monitors = captureMonitors([]).filter((monitor: CaptureMonitor) => monitor.id === initialId);
+            }
         }
-        if (compositor) retireCompositor(compositor);
-        compositor = started;
-        return { success: true, sourceId: started.sourceId };
-    } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : "Could not start the monitor fade helper." };
+        if (windowHandle === undefined && !monitors.some((monitor: CaptureMonitor) => monitor.id === initialId))
+            return { success: false, error: "The selected monitor is ignored or unavailable." };
+        preparationProgress = { phase: "download", downloaded: 0, totalBytes: 0, completed: 0, totalSteps: monitors.length + 9, status: "Starting screen share preparation." };
+        const prepared = await startCompositor(monitors, initialId, controller.signal, (update: Partial<PreparationProgress>) => {
+            if (generation === compositorGeneration) preparationProgress = { ...preparationProgress, ...update };
+        }, windowHandle, frameRate, captureMethod);
+        if (generation !== compositorGeneration) {
+            prepared.close();
+            return { success: false, error: "Screen share preparation was cancelled." };
+        }
+        compositor = prepared;
+        preparationProgress = { ...preparationProgress, phase: "ready", completed: preparationProgress.totalSteps, status: "Ready to share." };
+        return { success: true, sourceId: prepared.sourceId };
+    } catch {
+        if (generation === compositorGeneration) {
+            preparationProgress = { ...preparationProgress, phase: "error", status: "Capture setup failed. Native monitor switching is still available." };
+            closeCompositor();
+        }
+        return { success: false, error: "Could not prepare smooth transitions. Native monitor switching is still available." };
+    } finally {
+        clearTimeout(timeout);
     }
 }
 
 export async function setCompositorMonitor(_: IpcMainInvokeEvent, displayId: unknown, ignored: unknown) {
-    if (!isDisplayId(displayId) || !isIgnoredList(ignored)) return { success: false, error: "Invalid monitor selection." };
-    if (!compositor) return { success: false, error: "The monitor fade helper is not running." };
-    const monitor = captureMonitors(ignored).find(monitor => monitor.id === displayId);
-    if (!monitor) return { success: false, error: "The selected monitor is ignored or unavailable." };
+    if (!isDisplayId(displayId) || !isIgnoredList(ignored))
+        return { success: false, error: "Invalid monitor selection." };
+    if (!compositor) return { success: false, error: "The prepared screen share is not available." };
     try {
-        await compositor.setMonitor(monitor);
+        const monitors = captureMonitors(ignored);
+        if (!monitors.some((monitor: CaptureMonitor) => monitor.id === displayId))
+            return { success: false, error: "The selected monitor is ignored or unavailable." };
+        await compositor.setMonitor(displayId, monitors);
         return { success: true };
     } catch {
-        return { success: false, error: "The monitor fade helper could not switch monitors." };
+        return { success: false, error: "Could not update the prepared screen share." };
     }
 }
 
-export function stopCompositor(_: IpcMainInvokeEvent, delayed: unknown = false) {
-    if (delayed === true) {
-        compositorGeneration++;
-        if (compositor) retireCompositor(compositor);
-        compositor = undefined;
-    } else closeCompositor();
-}
-
-// Older versions downloaded OBS into this folder for fade transitions. The helper now uses Windows Graphics Capture directly.
-export async function removeLegacyCapture(_: IpcMainInvokeEvent) {
-    try {
-        for (const entry of await readdir(captureDirectory))
-            if (entry.startsWith("obs-")) await rm(join(captureDirectory, entry), { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
-    } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-            console.warn("[ScreenSharePlus] Could not remove the old OBS capture files.", error);
-    }
+export function stopCompositor(_: IpcMainInvokeEvent) {
+    stopIdentification(_);
+    closeCompositor();
+    return { success: true };
 }
 
 function getCaptureSources() {
@@ -167,46 +178,11 @@ function getCaptureSources() {
     if (sourceCache === undefined || displayLayout !== layout) {
         displayLayout = layout;
         sourceCache = desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } })
-            .then(async (sources: DesktopCapturerSource[]) => {
-                const monitors = process.platform === "win32" ? captureMonitors([]) : [];
-                let handles: string[] = [];
-                if (monitors.length > 0) {
-                    const points = monitors.map(monitor => `${Math.round(monitor.x + monitor.width / 2)},${Math.round(monitor.y + monitor.height / 2)}`).join(",");
-                    const script = `Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class ScreenSharePlusMonitor {
-    [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
-    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-    [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(Point point, uint flags);
-    public static void Print(int[] points) {
-        IntPtr previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
-        try {
-            for (int i = 0; i < points.Length; i += 2)
-                Console.WriteLine(MonitorFromPoint(new Point { X = points[i], Y = points[i + 1] }, 0).ToInt64());
-        } finally { SetThreadDpiAwarenessContext(previous); }
-    }
-}
-'@
-[ScreenSharePlusMonitor]::Print([int[]]@(${points}))`;
-                    const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
-                        windowsHide: true, timeout: 10_000
-                    });
-                    handles = stdout.trim().split(/\r?\n/);
-                    if (handles.length !== monitors.length || handles.some(handle => !/^[1-9]\d{0,19}$/.test(handle)))
-                        throw new Error("Could not resolve Windows monitor handles.");
-                }
-                return sources.map((source: DesktopCapturerSource) => {
-                    const index = monitors.findIndex(monitor => monitor.id === source.display_id);
-                    if (process.platform === "win32" && index < 0)
-                        throw new Error("Could not match a Windows capture monitor.");
-                    return {
-                        id: process.platform === "win32" ? `screen-handle:${handles[index]}` : source.id,
-                        displayId: source.display_id,
-                        name: source.name
-                    };
-                });
-            });
+            .then((sources: DesktopCapturerSource[]) => sources.map((source: DesktopCapturerSource) => ({
+                id: source.id,
+                displayId: source.display_id,
+                name: source.name
+            })));
     }
 
     return sourceCache;

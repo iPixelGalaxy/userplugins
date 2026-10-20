@@ -8,11 +8,11 @@ import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
 import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
-import { findByPropsLazy, findStoreLazy } from "@webpack";
+import { findByPropsLazy } from "@webpack";
 import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, showToast, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu } from "./controls";
-import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
+import { openPreparationProgress } from "./progress";
 import { rememberIgnoredMonitors, settings } from "./settings";
 
 interface StreamBitrate {
@@ -38,52 +38,23 @@ interface CaptureSource {
 }
 
 interface SourceEvent {
-    settings: { context?: string; desktopSettings?: { sourceId: string; }; qualityOptions?: unknown; } | null;
+    settings: { context?: string; desktopSettings?: { sourceId: string; }; } | null;
 }
 
 interface StreamStartEvent {
     type: "STREAM_START";
     sourceId?: string;
     sourceName?: string;
-    guildId?: string | null;
-    channelId?: string;
-    sound?: boolean;
-    previewDisabled?: boolean;
     [key: string]: unknown;
-}
-
-interface CaptureConnection {
-    context: string;
-    goLiveSourceIdentifier: string | null;
-    soundshareId: number | null;
-    vcScreenSharePlusGraphics?: boolean;
-    vcScreenSharePlusCaptureDevice?: boolean;
-}
-
-interface DesktopSource {
-    id: string;
-    soundshareId: number | null;
-}
-
-interface CaptureDescription {
-    desktopDescription?: { id: string; soundshareId: number | null; useGraphicsCapture?: boolean; useCaptureDeviceForEncode?: boolean; };
-}
-
-interface PreviewProps {
-    streamId: string;
-    paused?: boolean;
-    onReady?(): void;
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const logger = new Logger("ScreenSharePlus");
-const SOURCE_ID = FOLLOW_SOURCE_ID;
-const SOURCE_NAME = FOLLOW_SOURCE_NAME;
+const SOURCE_ID = "screen:vc-screenshare-plus";
+const SOURCE_NAME = "Monitor under mouse";
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
-const VideoStreamStore: { getStreamId(userId: string, guildId: string | null, context: string): string | undefined; } = findStoreLazy("VideoStreamStore");
 
 let following = false;
-let followingChannelId: string | undefined;
 let generation = 0;
 let displayId: string | undefined;
 let sourceId: string | undefined;
@@ -92,33 +63,26 @@ let startTimeout: ReturnType<typeof setTimeout> | undefined;
 let updating = false;
 let videoSwitchSourceId: string | undefined;
 let compositorSourceId: string | undefined;
-let compositorKey: string | undefined;
 let audioSourceId: string | undefined;
 let preparedIgnoredMonitors: string[] | undefined;
-let syncing = false;
-let syncQueued = false;
-let syncTimeout: ReturnType<typeof setTimeout> | undefined;
-let previewRecovery = false;
 
 function stopFollowing() {
     following = false;
-    followingChannelId = undefined;
     generation++;
     displayId = undefined;
     sourceId = undefined;
     videoSwitchSourceId = undefined;
     compositorSourceId = undefined;
-    compositorKey = undefined;
     audioSourceId = undefined;
     preparedIgnoredMonitors = undefined;
-    syncQueued = false;
-    previewRecovery = false;
-    void Native.stopCompositor().catch((error: unknown) => logger.warn("Could not close the monitor fade helper.", error));
-    for (const timer of [syncTimeout, startTimeout]) if (timer !== undefined) clearTimeout(timer);
-    syncTimeout = startTimeout = undefined;
+    void Native.stopCompositor().catch((error: unknown) => logger.warn("Could not close the prepared screen share.", error));
     if (intervalId !== undefined) {
         clearInterval(intervalId);
         intervalId = undefined;
+    }
+    if (startTimeout !== undefined) {
+        clearTimeout(startTimeout);
+        startTimeout = undefined;
     }
 }
 
@@ -128,129 +92,56 @@ function stopCapture(message: string) {
     showToast(message);
 }
 
-function switchSource(id: string) {
-    const live = MediaEngineStore.getGoLiveSource();
-    if (live == null) return;
-    sourceId = id;
-    videoSwitchSourceId = id;
-    const { preset, soundshareEnabled } = ApplicationStreamingSettingsStore.getState();
-    VoiceActions.setGoLiveSource({
-        context: "stream",
-        desktopSettings: { sourceId: id, sound: soundshareEnabled },
-        qualityOptions: { preset, ...live.quality }
-    });
-}
-
-// Sends the current source to Discord again. The connection patch treats a capture API change as a new source.
-function recapture() {
-    const current = MediaEngineStore.getGoLiveSource()?.desktopSource?.id;
-    if (current == null) return;
-    switchSource(sourceId !== undefined && current.split(":")[1] === sourceId.split(":")[1] ? sourceId : current);
-}
-
-function compositorQuality() {
-    const live = MediaEngineStore.getGoLiveSource()?.quality;
-    const state = ApplicationStreamingSettingsStore.getState();
-    const frameRate = Math.min(live?.frameRate || state.fps, 240);
-    const resolution = live?.resolution ?? state.resolution;
-    return { frameRate, resolution, key: `${frameRate}:${resolution}` };
-}
-
-function scheduleSync() {
-    if (!following) return;
-    if (syncTimeout !== undefined) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(() => {
-        syncTimeout = undefined;
-        void syncCapture();
-    }, 250);
-}
-
-async function syncCapture(force = false) {
-    if (syncing) {
-        syncQueued = true;
-        return;
-    }
-    if (!following || displayId === undefined || MediaEngineStore.getGoLiveSource()?.desktopSource == null) return;
-    const quality = compositorQuality();
-    if (!force && (compositorSourceId === undefined || settings.plain.fadeTransitions && compositorKey === quality.key)) return;
-
-    syncing = true;
-    const currentGeneration = ++generation;
-    try {
-        const { ignoredMonitors } = settings.plain;
-        const screen = await Native.getCursorSource(undefined, ignoredMonitors);
-        if (currentGeneration !== generation || !following) return;
-        if (ignoredMonitors !== settings.plain.ignoredMonitors) {
-            syncQueued = true;
-            return;
-        }
-        if (!screen.success) {
-            stopCapture(`ScreenSharePlus stopped sharing. ${screen.error}`);
-            return;
-        }
-        if (screen.sourceId === null) return;
-        displayId = screen.displayId;
-        compositorSourceId = compositorKey = audioSourceId = undefined;
-        switchSource(screen.sourceId);
-        void Native.stopCompositor(true);
-    } catch (error) {
-        if (currentGeneration === generation) logger.error("Could not update monitor fades.", error);
-    } finally {
-        syncing = false;
-        if (syncQueued) {
-            syncQueued = false;
-            void syncCapture(true);
-        }
-    }
-}
-
 async function followCursor() {
-    if (updating || syncing) return;
+    if (updating) return;
     updating = true;
     const currentGeneration = generation;
 
     try {
-        const { ignoredMonitors } = settings.plain;
-        const result = await Native.getCursorSource(displayId, ignoredMonitors);
+        const ignoredMonitors = settings.plain.ignoredMonitors;
+        let result = await Native.getCursorSource(displayId, ignoredMonitors);
         if (currentGeneration !== generation || !following) return;
         if (ignoredMonitors !== settings.plain.ignoredMonitors) return;
         if (!result.success) {
             stopCapture(`ScreenSharePlus stopped sharing. ${result.error}`);
             return;
         }
-        if (result.sourceId === null) return;
-        if (MediaEngineStore.getGoLiveSource()?.desktopSource == null) {
-            return;
-        }
-
-        if (settings.plain.fadeTransitions && displayId !== undefined) {
-            const quality = compositorQuality();
-            const prepared = await Native.prepareCompositor(displayId, ignoredMonitors, quality.frameRate, quality.resolution);
-            if (currentGeneration !== generation || !following) {
-                if (prepared.success) void Native.stopCompositor();
+        if (compositorSourceId !== undefined) {
+            const transition = await Native.setCompositorMonitor(result.displayId, ignoredMonitors);
+            if (currentGeneration !== generation || !following) return;
+            if (transition.success) {
+                displayId = result.displayId;
                 return;
             }
-            if (prepared.success && settings.plain.fadeTransitions) {
-                compositorSourceId = prepared.sourceId;
-                compositorKey = quality.key;
-                audioSourceId = result.sourceId;
-                switchSource(prepared.sourceId);
-                const moved = await Native.setCompositorMonitor(result.displayId, ignoredMonitors);
-                if (currentGeneration !== generation || !following) return;
-                if (!moved.success) logger.warn(moved.error);
-            } else {
-                if (!prepared.success) logger.warn(prepared.error);
-                else void Native.stopCompositor();
+            logger.warn(transition.error);
+            result = await Native.getCursorSource(undefined, ignoredMonitors);
+            if (currentGeneration !== generation || !following) return;
+            if (!result.success) {
+                stopCapture(`ScreenSharePlus stopped sharing. ${result.error}`);
+                return;
             }
         }
-
+        if (result.sourceId === null) return;
+        const source = MediaEngineStore.getGoLiveSource();
+        if (source?.desktopSource == null) {
+            return;
+        }
         displayId = result.displayId;
-        const faded = compositorSourceId !== undefined;
-        compositorSourceId = compositorKey = audioSourceId = undefined;
-        if (MediaEngineStore.getGoLiveSource()?.desktopSource?.id === result.sourceId) {
-            sourceId = result.sourceId;
-        } else switchSource(result.sourceId);
-        if (faded) void Native.stopCompositor(true);
+        sourceId = result.sourceId;
+        if (source.desktopSource.id.split(":")[1] === sourceId.split(":")[1]) return;
+
+        const { preset, soundshareEnabled } = ApplicationStreamingSettingsStore.getState();
+        videoSwitchSourceId = sourceId;
+        VoiceActions.setGoLiveSource({
+            context: "stream",
+            desktopSettings: { sourceId, sound: soundshareEnabled },
+            qualityOptions: { preset, ...source.quality }
+        });
+        if (audioSourceId !== undefined) {
+            compositorSourceId = undefined;
+            audioSourceId = undefined;
+            void Native.stopCompositor().catch((error: unknown) => logger.warn("Could not close the prepared screen share.", error));
+        }
     } catch (error) {
         if (currentGeneration !== generation) return;
         logger.error("Could not switch the shared monitor.", error);
@@ -279,14 +170,14 @@ export default definePlugin({
             find: 'navId:"manage-streams"',
             replacement: {
                 match: /(\i\.\i),\{(?=[^{}]{0,250}?navId:"manage-streams")/,
-                replace: "$self.CaptureMenu,{MenuComponent:$1,"
+                replace: "$self.CaptureMenu,{MenuComponent:$1,live:true,"
             }
         },
         {
             find: 'navId:"stream-options"',
             replacement: {
                 match: /(\i\.\i),\{(?=[^{}]{0,250}?navId:"stream-options")/,
-                replace: "$self.CaptureMenu,{MenuComponent:$1,"
+                replace: "$self.CaptureMenu,{MenuComponent:$1,live:false,"
             }
         },
         {
@@ -322,42 +213,10 @@ export default definePlugin({
             }
         },
         {
-            find: "desktopDegradationPreference=",
-            replacement: {
-                match: /desktopDegradationPreference=(\(0,\i\.\i\)\(\)\.DegradationPreference)\.MAINTAIN_FRAMERATE;/,
-                replace: "vcScreenSharePlusDegradation=$1;get desktopDegradationPreference(){return $self.degradationPreference(this.vcScreenSharePlusDegradation)}"
-            }
-        },
-        {
-            find: '"MediaEngineStore go live"',
-            replacement: [
-                {
-                    match: /(?<=\.videoHook,\i=)\i\(\)(?=,)/,
-                    replace: "$self.useGraphicsCapture($&)"
-                },
-                {
-                    match: /(?<=useCaptureDeviceForEncode:)\(0,\i\.\i\)\(\)/,
-                    replace: "$self.useCaptureDeviceForEncode($&)"
-                },
-                {
-                    // Discord stops soundshare and clears the stream before every source change, which cuts audio.
-                    match: /(\i)\?\.desktopSource!=null&&\1\.desktopSource\.id!==(\i)\?\.desktopSource\?\.id&&/,
-                    replace: "$&!$self.keepSource($1.desktopSource,$2?.desktopSource)&&"
-                }
-            ]
-        },
-        {
             find: '"2026-09-single-cpu-copy"',
             replacement: {
                 match: /(\i)(?=&&\(\i\+=",singleCpuCopy"\))/,
                 replace: "($1=$self.allowSingleCpuCopy($1,this.context,this.getVoiceParticipantType()))"
-            }
-        },
-        {
-            find: '"DirectVideo"',
-            replacement: {
-                match: /function \i\((\i)\)\{(?=return function\(\i,\i\)\{let\{streamId:)/,
-                replace: "$&$1=$self.usePreviewRecovery($1);"
             }
         },
         {
@@ -396,13 +255,6 @@ export default definePlugin({
             }
         },
         {
-            find: "MEDIA_ENGINE_SET_GO_LIVE_SOURCE:function",
-            replacement: {
-                match: /\i\.\i\.getPidFromDesktopSource\((\i)\)/g,
-                replace: "$self.getSourcePid($1,$&)"
-            }
-        },
-        {
             find: "this.goLiveSourceIdentifier===",
             group: true,
             replacement: [
@@ -411,30 +263,28 @@ export default definePlugin({
                     replace: "$&const vcScreenSharePlusKeepAudio=$self.shouldKeepAudio(this,arguments[0]);"
                 },
                 {
-                    match: /this\.goLiveSourceIdentifier===(\i)(?=\)\{if\(this\.setDesktopEncodingOptions)/,
-                    replace: "$self.sameCapture(this,arguments[0],$1)"
-                },
-                {
                     match: /this\.setSoundshareSource\(\i,\i\)(?=;let\[\i,\i\])/,
                     replace: "vcScreenSharePlusKeepAudio||$&"
                 }
             ]
+        },
+        {
+            find: "MEDIA_ENGINE_SET_GO_LIVE_SOURCE:function",
+            replacement: {
+                match: /\i\.\i\.getPidFromDesktopSource\((\i)\)/g,
+                replace: "$self.getSourcePid($1,$&)"
+            }
         }
     ],
 
     start() {
-        void Native.removeLegacyCapture();
-        if (settings.store.fadeTransitions) void Native.warmCompositor();
-        void startRetention(following);
+        if (!settings.store.obsCaptureAcknowledged) settings.store.useObsCapture = false;
         void Native.getMonitors().then(result => {
             if (result.success) rememberIgnoredMonitors(result.monitors);
         }).catch((error: unknown) => logger.warn("Could not update saved monitor exclusions.", error));
     },
 
-    stop() {
-        stopRetention();
-        stopFollowing();
-    },
+    stop: stopFollowing,
 
     CaptureMenu,
 
@@ -472,60 +322,18 @@ export default definePlugin({
             && available.some(capability => capability.codec === codec.name && capability.encode) }));
     },
 
-    useGraphicsCapture(supported: boolean) {
-        return supported && (compositorSourceId !== undefined || settings.plain.captureApi !== "dxgi");
-    },
-
-    useCaptureDeviceForEncode(supported: boolean) {
-        return supported && !previewRecovery;
-    },
-
-    usePreviewRecovery<T extends PreviewProps>(props: T): T {
-        const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-        const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
-        const own = stream !== null && props.streamId === VideoStreamStore.getStreamId(UserStore.getCurrentUser().id, stream.guildId, "stream");
-        React.useEffect(() => {
-            if (!own || props.paused || previewRecovery || MediaEngineStore.getGoLiveSource()?.desktopSource == null) return;
-            timer.current = setTimeout(() => {
-                const current = ApplicationStreamingStore.getCurrentUserActiveStream();
-                if (previewRecovery || current === null || MediaEngineStore.getGoLiveSource()?.desktopSource == null
-                    || props.streamId !== VideoStreamStore.getStreamId(UserStore.getCurrentUser().id, current.guildId, "stream")) return;
-                previewRecovery = true;
-                logger.warn("Restarting capture because the local stream preview did not receive video.");
-                recapture();
-            }, 5000);
-            return () => {
-                if (timer.current !== undefined) clearTimeout(timer.current);
-                timer.current = undefined;
-            };
-        }, [props.streamId, props.paused, own]);
-        return { ...props, onReady() {
-            if (timer.current !== undefined) clearTimeout(timer.current);
-            timer.current = undefined;
-            props.onReady?.();
-        } };
-    },
-
-    getSourcePid(id: string, pid: number | null) {
-        return id === compositorSourceId && audioSourceId !== undefined ? SoundshareStore.getPidFromDesktopSource(audioSourceId) : pid;
-    },
-
     overrideBitrate<T extends StreamBitrate>(quality: T, streaming: boolean): T {
         if (!streaming) return quality;
-        const { bitrate, lockBitrate } = settings.store;
-        const maximum = Math.min(quality.bitrateMax, bitrate * 1_000_000 || quality.bitrateMax);
+        const { bitrate, limitFrameRate } = settings.store;
+        const maximum = bitrate * 1_000_000;
+        if (maximum === 0 && !limitFrameRate) return quality;
         return { ...quality,
-            bitrateMin: lockBitrate ? maximum : Math.min(quality.bitrateMin, maximum),
-            bitrateMax: maximum,
-            bitrateTarget: lockBitrate ? maximum : quality.bitrateTarget === undefined ? undefined : Math.min(quality.bitrateTarget, maximum)
+            bitrateMin: maximum === 0 ? quality.bitrateMin : Math.min(quality.bitrateMin, maximum),
+            bitrateMax: maximum === 0 ? quality.bitrateMax : Math.min(quality.bitrateMax, maximum),
+            bitrateTarget: maximum === 0 || quality.bitrateTarget === undefined ? quality.bitrateTarget : Math.min(quality.bitrateTarget, maximum),
+            capture: limitFrameRate ? { ...quality.capture, framerate: Math.min(quality.capture.framerate, 30) } : quality.capture,
+            encode: limitFrameRate ? { ...quality.encode, framerate: Math.min(quality.encode.framerate, 30) } : quality.encode
         };
-    },
-
-    degradationPreference(preferences: Record<string, number>) {
-        const { degradation } = settings.plain;
-        const name = degradation === "disabled" ? "DISABLED" : degradation === "balanced" ? "BALANCED"
-            : degradation === "resolution" ? "MAINTAIN_RESOLUTION" : "MAINTAIN_FRAMERATE";
-        return preferences[name] ?? preferences.MAINTAIN_FRAMERATE;
     },
 
     maximumBitrate(original: number) {
@@ -534,36 +342,17 @@ export default definePlugin({
 
     updateBitrate() {
         MediaEngineStore.getMediaEngine().eachConnection((connection: MediaEngineConnection) => {
-            if (connection.context !== "stream" || !connection.hasDesktopSource() || connection.videoStreamParameters.length === 0) return;
-            connection.updateVideoQuality();
-            connection.applyVideoTransportOptions();
+            if (connection.context === "stream" && connection.hasDesktopSource() && connection.videoStreamParameters.length > 0)
+                connection.updateVideoQuality();
         });
     },
 
     flux: {
-        STREAM_START(event: StreamStartEvent) {
-            if (following) followingChannelId = event.channelId;
-            rememberScreenshare(following, event);
-        },
-        STREAM_UPDATE_SETTINGS() {
-            rememberScreenshare(following);
-        },
-        VOICE_CHANNEL_SELECT: voiceChannelSelected,
-        VOICE_STATE_UPDATES: queueResume,
-        RTC_CONNECTION_STATE({ context, state }: { context: string; state: string; }) {
-            if (context !== "default") return;
-            if (state === "RTC_CONNECTED") queueResume();
-            else pauseRetention();
-        },
-        WINDOW_UNLOAD() { pauseRetention(); },
-        MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings }: SourceEvent) {
-            if (settings !== null && settings.context !== "stream") return;
-            if (settings === null && ApplicationStreamingStore.getCurrentUserActiveStream()) return;
-            if (settings?.desktopSettings != null) rememberScreenshare(following && settings.desktopSettings.sourceId === sourceId);
-            else if (settings === null || settings.context === "stream") pauseRetention();
+        MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings: sourceSettings }: SourceEvent) {
             if (!following && compositorSourceId === undefined) return;
-            if (settings?.qualityOptions != null) scheduleSync();
-            const id = settings?.desktopSettings?.sourceId;
+            if (sourceSettings !== null && sourceSettings.context !== "stream") return;
+            if (sourceSettings === null && ApplicationStreamingStore.getCurrentUserActiveStream()) return;
+            const id = sourceSettings?.desktopSettings?.sourceId;
             if (id === undefined || id.split(":")[0] !== sourceId?.split(":")[0]
                 || id.split(":")[1] !== sourceId?.split(":")[1]) {
                 stopFollowing();
@@ -578,71 +367,38 @@ export default definePlugin({
             }
         },
         STREAM_STOP({ streamKey }: { streamKey: string; }) {
-            stopRetainedStream(streamKey);
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)
-                && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
         },
         STREAM_DELETE({ streamKey }: { streamKey: string; }) {
-            pauseRetention(streamKey);
-            if (streamKey.endsWith(UserStore.getCurrentUser().id)
-                && (followingChannelId === undefined || streamKey.split(":")[2] === followingChannelId)) stopFollowing();
-            queueResume();
+            if (streamKey.endsWith(UserStore.getCurrentUser().id)) stopFollowing();
         },
-        LOGOUT() {
-            stopRetention();
-            stopFollowing();
-        },
-        CONNECTION_OPEN() {
-            void startRetention(following);
-        }
-    },
-
-    onRetainChange(enabled: boolean) {
-        changeRetention(enabled, following);
-    },
-
-    onRetainTimeoutChange: updateRetentionTimeout,
-
-    onCaptureApiChange: recapture,
-
-    onFadeChange() {
-        if (settings.store.fadeTransitions) void Native.warmCompositor();
-        scheduleSync();
+        LOGOUT: stopFollowing
     },
 
     onIgnoredMonitorsChange() {
         if (!following) return;
-        void syncCapture(true);
+        generation++;
+        void followCursor();
+    },
+
+    getSourcePid(id: string, pid: number | null) {
+        return id === compositorSourceId && audioSourceId !== undefined ? SoundshareStore.getPidFromDesktopSource(audioSourceId) : pid;
     },
 
     startStream(event: StreamStartEvent) {
-        if (!canResumeInChannel(event.channelId)) return;
         if (event.sourceName === SOURCE_NAME && (!following || event.sourceId !== sourceId
             || displayId === undefined || preparedIgnoredMonitors !== settings.plain.ignoredMonitors)) return;
         return FluxDispatcher.dispatch(event);
     },
 
-    // Monitor switches and fade helper swaps keep the same system audio, so Discord's teardown only causes a gap.
-    keepSource(previous: DesktopSource, next: DesktopSource | undefined) {
-        return following && next != null && next.id === videoSwitchSourceId && previous.soundshareId === next.soundshareId;
-    },
-
-    sameCapture(connection: CaptureConnection, source: CaptureDescription, id: string | null) {
-        const graphics = source.desktopDescription?.useGraphicsCapture;
-        const captureDevice = source.desktopDescription?.useCaptureDeviceForEncode;
-        if (connection.goLiveSourceIdentifier === id && connection.vcScreenSharePlusGraphics === graphics
-            && connection.vcScreenSharePlusCaptureDevice === captureDevice) return true;
-        connection.vcScreenSharePlusGraphics = graphics;
-        connection.vcScreenSharePlusCaptureDevice = captureDevice;
-        return false;
-    },
-
-    shouldKeepAudio(connection: CaptureConnection, source: CaptureDescription) {
-        const description = source.desktopDescription;
-        if (connection.context !== "stream" || connection.goLiveSourceIdentifier === null
-            || description == null || description.soundshareId !== connection.soundshareId) return false;
-        return description.id === connection.goLiveSourceIdentifier
-            || following && connection.goLiveSourceIdentifier !== videoSwitchSourceId && description.id === videoSwitchSourceId;
+    shouldKeepAudio(
+        connection: { context: string; goLiveSourceIdentifier: string | null; soundshareId: number | null; },
+        source: { desktopDescription?: { id: string; soundshareId: number | null; }; }
+    ) {
+        return following && connection.context === "stream" && connection.goLiveSourceIdentifier !== null
+            && connection.goLiveSourceIdentifier !== videoSwitchSourceId
+            && source.desktopDescription?.id === videoSwitchSourceId
+            && source.desktopDescription?.soundshareId === connection.soundshareId;
     },
 
     async addSources(promise: Promise<CaptureSource[]>) {
@@ -663,12 +419,26 @@ export default definePlugin({
     async prepareSource(source: CaptureSource | number | null) {
         stopFollowing();
         if (typeof source !== "object" || source === null) return source;
-        sourceId = source.id;
-        if (source.id !== SOURCE_ID) return source;
+        const followsCursor = source.id === SOURCE_ID;
+        if (!followsCursor && (!settings.plain.useObsCapture || !/^(?:screen|window):/.test(source.id))) return source;
         const currentGeneration = generation;
-        const { ignoredMonitors } = settings.plain;
+        const ignoredMonitors = settings.plain.ignoredMonitors;
+        const frameRate = Math.min(ApplicationStreamingSettingsStore.getState().fps, settings.store.limitFrameRate ? 30 : 240);
+        const captureMethod = settings.store.captureMethod;
 
         try {
+            if (!followsCursor) {
+                const ready = await Native.isCaptureReady();
+                if (currentGeneration !== generation) return null;
+                const closeProgress = ready ? undefined : openPreparationProgress(stopFollowing);
+                const prepared = await Native.prepareCompositor(source.id, [], frameRate, captureMethod).finally(() => closeProgress?.());
+                if (currentGeneration !== generation) return null;
+                if (!prepared.success) { logger.warn(prepared.error); return source; }
+                compositorSourceId = prepared.sourceId;
+                audioSourceId = source.id;
+                sourceId = prepared.sourceId;
+                return { ...source, id: prepared.sourceId };
+            }
             const result = await Native.getCursorSource(undefined, ignoredMonitors);
             if (currentGeneration !== generation) return null;
             if (ignoredMonitors !== settings.plain.ignoredMonitors) {
@@ -681,10 +451,28 @@ export default definePlugin({
             }
             if (result.sourceId === null) return null;
 
+            let sharedSourceId = result.sourceId;
+            if (settings.plain.useObsCapture) {
+                const ready = await Native.isCaptureReady();
+                if (currentGeneration !== generation) return null;
+                const closeProgress = ready ? undefined : openPreparationProgress(stopFollowing);
+                const prepared = await Native.prepareCompositor(result.displayId, ignoredMonitors, frameRate, captureMethod).finally(() => closeProgress?.());
+                if (currentGeneration !== generation) return null;
+                if (ignoredMonitors !== settings.plain.ignoredMonitors) {
+                    stopCapture("Ignored monitors changed. Start screen sharing again.");
+                    return null;
+                }
+                if (prepared.success) {
+                    sharedSourceId = prepared.sourceId;
+                    compositorSourceId = sharedSourceId;
+                    audioSourceId = result.sourceId;
+                } else logger.warn(prepared.error);
+            }
+
             following = true;
             preparedIgnoredMonitors = ignoredMonitors;
             displayId = result.displayId;
-            sourceId = result.sourceId;
+            sourceId = sharedSourceId;
             startTimeout = setTimeout(() => {
                 if (intervalId === undefined) stopFollowing();
             }, 30_000);
