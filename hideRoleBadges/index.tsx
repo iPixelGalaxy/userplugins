@@ -5,11 +5,13 @@
  */
 
 import { definePluginSettings } from "@api/Settings";
+import { FormSwitch } from "@components/FormSwitch";
 import { Paragraph } from "@components/Paragraph";
 import { Devs } from "@utils/constants";
+import { Margins } from "@utils/margins";
 import definePlugin from "@utils/types";
 import type { Guild } from "@vencord/discord-types";
-import { Menu } from "@webpack/common";
+import { ContextMenuApi, GuildRoleStore, GuildStore, lodash, Menu, SearchableSelect, SelectedGuildStore, useState, useStateFromStores } from "@webpack/common";
 
 const settings = definePluginSettings({}).withPrivateSettings<{
     hiddenGuildIds?: string[];
@@ -17,9 +19,40 @@ const settings = definePluginSettings({}).withPrivateSettings<{
 
 const SETTING_KEYS: ["hiddenGuildIds"] = ["hiddenGuildIds"];
 
-interface RoleIconContext {
-    guildId?: string;
-    guild?: Guild;
+function setGuildHidden(guildId: string, hidden: boolean) {
+    const guildIds = (settings.store.hiddenGuildIds ?? []).filter(id => id !== guildId);
+    settings.store.hiddenGuildIds = hidden ? [...guildIds, guildId] : guildIds;
+}
+
+function GuildSettings() {
+    const { hiddenGuildIds = [] } = settings.use(SETTING_KEYS);
+    const guilds = useStateFromStores([GuildStore], () => Object.values(GuildStore.getGuilds()).sort((a, b) => a.name.localeCompare(b.name)), [], lodash.isEqual);
+    const [guildId, setGuildId] = useState(() => SelectedGuildStore.getGuildId() ?? guilds[0]?.id ?? "");
+
+    return (
+        <>
+            <Paragraph>
+                Choose a server to configure its role icons in chat and the member list.
+                You can also right-click a server and toggle Hide Role Badges.
+            </Paragraph>
+            <SearchableSelect
+                options={guilds.map(guild => ({ label: guild.name, value: guild.id }))}
+                value={guildId}
+                placeholder="Select a server"
+                maxVisibleItems={6}
+                closeOnSelect
+                onChange={setGuildId}
+            />
+            <FormSwitch
+                className={Margins.top16}
+                title="Hide role badges in this server"
+                description="Other servers keep their own settings."
+                disabled={!guildId}
+                value={hiddenGuildIds.includes(guildId)}
+                onChange={hidden => setGuildHidden(guildId, hidden)}
+            />
+        </>
+    );
 }
 
 export default definePlugin({
@@ -29,19 +62,14 @@ export default definePlugin({
     tags: ["Appearance", "Chat"],
     settings,
 
-    settingsAboutComponent: () => (
-        <Paragraph>
-            Right-click a server and toggle Hide Role Badges to hide its image and emoji role icons.
-            Each server is configured separately, and your choices are saved.
-        </Paragraph>
-    ),
+    settingsAboutComponent: GuildSettings,
 
     patches: [
         {
             find: ".customIconSrc,name:",
             replacement: {
                 match: /(?<=return )\i\.useMemo\(\(\)=>\i\(\i(?:,\i)?\),\[\i(?:,\i)?\]\)/g,
-                replace: "$self.useRoleIcon(arguments[0],$&)"
+                replace: "$self.useRoleIcon($&)"
             }
         }
     ],
@@ -50,27 +78,25 @@ export default definePlugin({
         "guild-context"(children, { guild }: { guild?: Guild; }) {
             if (!guild) return;
 
-            const hiddenGuildIds = settings.plain.hiddenGuildIds ?? [];
-            const hidden = hiddenGuildIds.includes(guild.id);
+            const guildId = guild.id;
+            const hidden = settings.store.hiddenGuildIds?.includes(guildId) ?? false;
             children.push(
                 <Menu.MenuCheckboxItem
-                    id="vc-hide-role-badges"
+                    key={guildId}
+                    id={`vc-hide-role-badges-${guildId}`}
                     label="Hide Role Badges"
                     checked={hidden}
                     action={() => {
-                        const guildIds = settings.plain.hiddenGuildIds ?? [];
-                        settings.store.hiddenGuildIds = guildIds.includes(guild.id)
-                            ? guildIds.filter(id => id !== guild.id)
-                            : [...guildIds, guild.id];
+                        setGuildHidden(guildId, !hidden);
+                        ContextMenuApi.closeContextMenu();
                     }}
                 />
             );
         }
     },
 
-    useRoleIcon<T>(context: string | RoleIconContext | undefined, icon: T) {
+    useRoleIcon<T extends { roleId: string; }>(icon: T | undefined) {
         const { hiddenGuildIds = [] } = settings.use(SETTING_KEYS);
-        const guildId = typeof context === "string" ? context : context?.guildId ?? context?.guild?.id;
-        return guildId && hiddenGuildIds.includes(guildId) ? undefined : icon;
+        return icon && hiddenGuildIds.some(guildId => GuildRoleStore.getRole(guildId, icon.roleId) != null) ? undefined : icon;
     }
 });
