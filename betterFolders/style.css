@@ -23,11 +23,16 @@
 }
 
 .vc-betterFolders-guilds.vc-betterFolders-guilds {
-    width: calc(var(--custom-guild-list-width) + 8px);
+    width: var(--custom-guild-list-width);
 }
 
-.vc-betterFolders-scroller {
-    scrollbar-gutter: stable;
+.vc-betterFolders-scroller.vc-betterFolders-scroller {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+}
+
+.vc-betterFolders-scroller.vc-betterFolders-scroller::-webkit-scrollbar {
+    display: none;
 }
 
 @container style(--\\--compact-server-list: true) {
