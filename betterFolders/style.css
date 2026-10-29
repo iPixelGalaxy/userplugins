@@ -1,6 +1,6 @@
 .vc-betterFolders-sidebar {
     grid-area: betterFoldersSidebar;
-    grid-template-columns: 1fr;
+    flex-shrink: 0;
     min-width: 0;
     min-height: 0;
     overflow: hidden;
@@ -8,7 +8,8 @@
 
 .vc-betterFolders-sidebar-content {
     display: flex;
-    min-width: 0;
+    flex-shrink: 0;
+    width: max-content;
     min-height: 0;
     overflow: hidden;
 }
@@ -27,6 +28,14 @@
 
 .vc-betterFolders-scroller {
     scrollbar-gutter: stable;
+}
+
+@container style(--\\--compact-server-list: true) {
+    .vc-betterFolders-sidebar-grid,
+    .vc-betterFolders-sidebar-container {
+        --guildbar-avatar-size: 40px;
+        --guildbar-folder-size: 48px;
+    }
 }
 
 /* These area names need to be hardcoded. Only betterFoldersSidebar is added by the plugin. */

@@ -17,14 +17,32 @@
 */
 
 import ErrorBoundary from "@components/ErrorBoundary";
-import { findComponentByCodeLazy } from "@webpack";
-import { Animations, ChannelRTCStore, ExpandedGuildFolderStore, SortedGuildStore, useStateFromStores } from "@webpack/common";
-import type { CSSProperties } from "react";
+import { findByCodeLazy, findComponentByCodeLazy } from "@webpack";
+import { Animations, ChannelRTCStore, ExpandedGuildFolderStore, SortedGuildStore, useCallback, useRef, useState, useStateFromStores } from "@webpack/common";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 
 import { settings } from ".";
 
 const GuildsBar = findComponentByCodeLazy('("guildsnav")');
 const SIDEBAR_SETTINGS = ["sidebarAnim"] as const;
+const useResizeObserver = findByCodeLazy<(
+    ref: RefObject<Element | null>,
+    callback: (size: { width: number; height: number; }) => void,
+    deps?: unknown[]
+) => void>("borderBoxSize", "blockSize", "inlineSize");
+
+interface SidebarContentProps {
+    children: ReactNode;
+    onResize: (width: number) => void;
+}
+
+function SidebarContent({ children, onResize }: SidebarContentProps) {
+    const ref = useRef<HTMLDivElement>(null);
+    const handleResize = useCallback(({ width }: { width: number; }) => onResize(width), [onResize]);
+    useResizeObserver(ref, handleResize);
+
+    return <div ref={ref} className="vc-betterFolders-sidebar-content">{children}</div>;
+}
 
 function getExpandedFolderIds() {
     const expandedFolders = ExpandedGuildFolderStore.getExpandedFolders();
@@ -43,24 +61,25 @@ function getExpandedFolderIds() {
 
 export default ErrorBoundary.wrap(guildsBarProps => {
     const { sidebarAnim } = settings.use(SIDEBAR_SETTINGS);
+    const [sidebarWidth, setSidebarWidth] = useState(0);
     const expandedFolderIds = useStateFromStores([ExpandedGuildFolderStore, SortedGuildStore], () => getExpandedFolderIds());
     const isFullscreen = useStateFromStores([ChannelRTCStore], () => ChannelRTCStore.isFullscreenInContext());
 
     const Sidebar = (
-        <div className="vc-betterFolders-sidebar-content">
+        <SidebarContent onResize={setSidebarWidth}>
             <GuildsBar
                 {...guildsBarProps}
                 isBetterFolders={true}
                 betterFoldersExpandedIds={expandedFolderIds}
             />
-        </div>
+        </SidebarContent>
     );
 
     const visible = !!expandedFolderIds.size;
 
     // We need to display none if we are in fullscreen. Yes this seems horrible doing with css, but it's literally how Discord does it.
     const sidebarStyle = {
-        display: isFullscreen ? "none" : "grid"
+        display: isFullscreen ? "none" : "flex"
     } satisfies CSSProperties;
 
     if (!sidebarAnim) {
@@ -72,9 +91,10 @@ export default ErrorBoundary.wrap(guildsBarProps => {
     return (
         <Animations.Transition
             items={visible}
-            from={{ gridTemplateColumns: "0fr" }}
-            enter={{ gridTemplateColumns: "1fr" }}
-            leave={{ gridTemplateColumns: "0fr" }}
+            from={{ width: 0 }}
+            enter={{ width: sidebarWidth }}
+            update={{ width: sidebarWidth }}
+            leave={{ width: 0 }}
             config={{ duration: 200 }}
         >
             {(animationStyle: CSSProperties, show: boolean) =>
