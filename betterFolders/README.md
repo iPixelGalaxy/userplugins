@@ -8,6 +8,10 @@ bundled plugins, so this copy replaces the bundled registration and uses the
 existing enabled state and settings. Leave BetterFolders enabled. No edits to
 `src/plugins/betterFolders` are needed.
 
+Find the existing BetterFolders entry under **Show UserPlugins** in plugin
+settings. Its card displays the **User Plugin** badge and identifies the local
+fork in its description. There is no second BetterFolders entry.
+
 The sidebar filters the server tree to expanded folders before rendering. Folder
 contents render only in the secondary rail, while the primary rail retains the
 configured folder icon appearance. Both rails reserve space for their scrollbars.
