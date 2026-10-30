@@ -12,6 +12,7 @@ import { Button } from "@components/Button";
 import { Divider } from "@components/Divider";
 import ErrorBoundary from "@components/ErrorBoundary";
 import { HeadingSecondary } from "@components/Heading";
+import { Paragraph } from "@components/Paragraph";
 import { Devs, EquicordDevs } from "@utils/constants";
 import { classNameFactory } from "@utils/css";
 import { Margins } from "@utils/margins";
@@ -22,7 +23,6 @@ import { RenderModalProps, type User } from "@vencord/discord-types";
 import { ChannelType } from "@vencord/discord-types/enums";
 import {
     ChannelStore,
-    Forms,
     GuildMemberStore,
     IconUtils,
     Menu,
@@ -143,7 +143,7 @@ function TroubleshootingSettings() {
         <div className={cl("troubleshooting")}>
             <Divider className={cl("divider")} />
 
-            <Forms.FormTitle tag="h3" className={cl("title")}>Troubleshooting</Forms.FormTitle>
+            <HeadingSecondary className={cl("title")}>Troubleshooting</HeadingSecondary>
 
             <div className={cl("row")}>
                 <div className={cl("buttons")}>
@@ -156,16 +156,16 @@ function TroubleshootingSettings() {
                     </Button>
                 </div>
 
-                <Forms.FormText className={cl("cache-text")}>
+                <Paragraph className={cl("cache-text")}>
                     Cache: {cacheStats ? `${formatBytes(cacheStats.bytes)} • ${cacheStats.entries} entries` : "Unknown"}
-                </Forms.FormText>
+                </Paragraph>
             </div>
 
-            <Forms.FormText className={cl("api-text")}>
+            <Paragraph className={cl("api-text")}>
                 <span>Last API call: </span>
                 <span className={apiStatusClass}>{apiStatus.message}</span>
                 <span className={cl("api-time")}> • {lastApiAt}</span>
-            </Forms.FormText>
+            </Paragraph>
         </div>
     );
 }
@@ -228,9 +228,9 @@ function CustomSoundSettings({ soundKey, nameKey }: { soundKey: string; nameKey:
 
     return (
         <div className={cl("custom-sound")}>
-            <Forms.FormText className={cl("custom-sound-text")}>
+            <Paragraph className={cl("custom-sound-text")}>
                 {hasCustomSound ? `Selected: ${customSoundName || "Custom audio"}` : "No custom sound selected."}
-            </Forms.FormText>
+            </Paragraph>
             <input
                 ref={fileInputRef}
                 type="file"
@@ -935,9 +935,9 @@ function VoiceSelectModal({ modalProps, user }: { modalProps: RenderModalProps; 
                     onChange={v => setCurrentValue(v as any)}
                 />
 
-                <Forms.FormText className={cl("preview-hint")}>
+                <Paragraph className={cl("preview-hint")}>
                     Preview how this voice sounds with their name:
-                </Forms.FormText>
+                </Paragraph>
                 <div className={cl("preview-buttons")}>
                     <Button
                         variant="secondary"
@@ -1231,22 +1231,22 @@ export default definePlugin({
                         />
                     )}
                     <div className={cl("author-content")}>
-                        <Forms.FormText className={cl("author-title")}>
+                        <Paragraph className={cl("author-title")}>
                             Note from example-git
-                        </Forms.FormText>
-                        <Forms.FormText className={cl("author-text")}>
+                        </Paragraph>
+                        <Paragraph className={cl("author-text")}>
                             Old TikTok-TTS API died, so I set up a new cloudflare worker. It's rate-limited and stricter than the old one by design - please don't abuse it so it can stay available for plugins like this.
-                        </Forms.FormText>
+                        </Paragraph>
                     </div>
                 </div>
 
                 <div className={cl("preview-section")}>
-                    <Forms.FormTitle tag="h3" className={cl("preview-title")}>
+                    <HeadingSecondary className={cl("preview-title")}>
                         Preview Sounds {busy && "(playing...)"}
-                    </Forms.FormTitle>
-                    <Forms.FormText className={cl("preview-subtitle")}>
+                    </HeadingSecondary>
+                    <Paragraph className={cl("preview-subtitle")}>
                         Uses your selected narrator voice
-                    </Forms.FormText>
+                    </Paragraph>
                     <div className={cl("preview-grid")}>
                         {allTypes.map(t => (
                             <Button
