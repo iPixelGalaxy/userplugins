@@ -1,0 +1,54 @@
+.vc-betterFolders-sidebar {
+    grid-area: betterFoldersSidebar;
+    flex-shrink: 0;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.vc-betterFolders-sidebar-content {
+    display: flex;
+    flex-shrink: 0;
+    width: max-content;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.vc-betterFolders-sidebar-content > nav {
+    flex-shrink: 0;
+}
+
+.vc-betterFolders-sidebar-container {
+    width: auto;
+}
+
+.vc-betterFolders-guilds.vc-betterFolders-guilds {
+    width: var(--custom-guild-list-width);
+}
+
+.vc-betterFolders-scroller.vc-betterFolders-scroller {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+}
+
+.vc-betterFolders-scroller.vc-betterFolders-scroller::-webkit-scrollbar {
+    display: none;
+}
+
+@container style(--\\--compact-server-list: true) {
+    .vc-betterFolders-sidebar-grid,
+    .vc-betterFolders-sidebar-container {
+        --guildbar-avatar-size: 40px;
+        --guildbar-folder-size: 48px;
+    }
+}
+
+/* These area names need to be hardcoded. Only betterFoldersSidebar is added by the plugin. */
+.vc-betterFolders-sidebar-grid {
+    /* stylelint-disable-next-line value-keyword-case */
+    grid-template-columns: [start] min-content [guildsEnd] min-content [sidebarEnd] min-content [channelsEnd] 1fr [end];
+    grid-template-areas:
+        "titleBar titleBar titleBar titleBar"
+        "guildsList betterFoldersSidebar notice notice"
+        "guildsList betterFoldersSidebar channelsList page";
+}
