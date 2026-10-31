@@ -1,9 +1,14 @@
 # OpenInApp userplugin
 
 This standalone fork replaces Equicord's bundled OpenInApp without changing the
-main repository. Keep this directory in `src/userplugins` and build Equicord normally.
+main repository. Keep both `openInApp` and `openInAppNative.desktop` in
+`src/userplugins` and build Equicord normally.
 Enable **OpenInApp** under **Show UserPlugins**, then restart Discord after loading
 the new build. The existing enabled state and app settings are preserved.
+
+The desktop helper registers as `OpenInAppNative`, which avoids colliding with
+the bundled OpenInApp native helper. It is enabled automatically and has no
+separate settings or toggle.
 
 The **Spotify app** dropdown sits immediately below the **Spotify** toggle.
 Choose **Spotify** or **SpotiFlex** (the default). The toggle controls whether

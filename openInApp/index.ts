@@ -106,7 +106,7 @@ const pluginSettings = definePluginSettings({
     }, {} as SettingsDefinition)
 });
 
-const Native = VencordNative.pluginHelpers.OpenInApp as PluginNative<typeof import("./native")>;
+const Native = VencordNative.pluginHelpers.OpenInAppNative as PluginNative<typeof import("../openInAppNative.desktop/native")>;
 const originalHandleLink = BundledOpenInApp.handleLink;
 
 async function openUrl(url: string) {
