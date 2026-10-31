@@ -44,7 +44,7 @@ export async function resolveRedirect(_: IpcMainInvokeEvent, url: string) {
 }
 
 export async function openSpotiFlex(_: IpcMainInvokeEvent, url: string) {
-    if (typeof url !== "string" || url.length > 4096 || !/^spotiflex:\/\/(track|album|artist|playlist|user|episode|prerelease)\/[A-Za-z0-9._~%\-]+$/.test(url))
+    if (typeof url !== "string" || url.length > 4096 || !/^spotiflex:\/\/(track|album|artist|playlist|user|episode|show)\/[A-Za-z0-9._~%\-]+$/.test(url))
         return { success: false, error: "Invalid SpotiFlex link." } as const;
 
     try {

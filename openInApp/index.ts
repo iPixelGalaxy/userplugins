@@ -35,8 +35,8 @@ interface URLReplacementRule {
 // Do not forget to add protocols to the ALLOWED_PROTOCOLS constant
 const UrlReplacementRules: Record<string, URLReplacementRule> = {
     spotify: {
-        match: /^https:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(track|album|artist|playlist|user|episode|prerelease)\/([^/?#]+)(?:[?#].*)?$/,
-        replace: (_, type, id) => `${!IS_WEB && pluginSettings.store.spotifyApp === "spotiflex" ? "spotiflex" : "spotify"}://${type}/${id}`,
+        match: /^https:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(track|album|artist|playlist|user|episode|show|prerelease)\/([^/?#]+)(?:[?#].*)?$/,
+        replace: (_, type, id) => `${!IS_WEB && pluginSettings.store.spotifyApp === "spotiflex" && type !== "prerelease" ? "spotiflex" : "spotify"}://${type}/${id}`,
         description: "Open Spotify links in the selected app.",
         shortlinkMatch: /^https:\/\/spotify\.link\/.+$/,
         accountViewReplace: userId => !IS_WEB && pluginSettings.store.spotifyApp === "spotiflex"
@@ -123,11 +123,10 @@ async function openUrl(url: string) {
 
 export default definePlugin({
     name: "OpenInApp",
-    description: "Open links in their apps with a choice of Spotify or SpotiFlex.",
+    description: "Userplugin fork of OpenInApp with SpotiFlex support, maintained separately from Equicord.",
     tags: ["Utility"],
     authors: [Devs.Ven, Devs.surgedevs],
     settings: pluginSettings,
-    isModified: true,
 
     patches: [
         {

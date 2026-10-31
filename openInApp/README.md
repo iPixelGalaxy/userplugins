@@ -5,6 +5,8 @@ main repository. Keep both `openInApp` and `openInAppNative.desktop` in
 `src/userplugins` and build Equicord normally.
 Enable **OpenInApp** under **Show UserPlugins**, then restart Discord after loading
 the new build. The existing enabled state and app settings are preserved.
+The plugin card explicitly identifies this as an independent userplugin and shows
+the **User Plugin** badge instead of Equicord's modified plugin badge.
 
 The desktop helper registers as `OpenInAppNative`, which avoids colliding with
 the bundled OpenInApp native helper. It is enabled automatically and has no
@@ -20,10 +22,10 @@ use the selected app. Steam, Epic Games, Tidal, iTunes, VRCX, and Telegram retai
 their existing behavior. MusicControls' own Spotify URI setting is separate;
 its player links are not handled by OpenInApp.
 
-## SpotiFlex URL contract
+## SpotiFlex URL support
 
-SpotiFlex must register the `spotiflex` protocol with the operating system and
-handle these URLs when starting and when already running:
+SpotiFlex's URL implementation accepts these URLs when starting and when already
+running. The installed app must register the `spotiflex` protocol with the OS:
 
 ```text
 spotiflex://track/<id>
@@ -32,15 +34,20 @@ spotiflex://artist/<id>
 spotiflex://playlist/<id>
 spotiflex://user/<id>
 spotiflex://episode/<id>
-spotiflex://prerelease/<id>
+spotiflex://show/<id>
 ```
 
-Connected account usernames are percent encoded. Spotify tracking query strings
-and fragments are omitted. The URL should navigate to the corresponding item;
-opening a link should not automatically start playback.
+Track links start playback. Album, artist, playlist, and user links open their
+pages. Episode and show links bring SpotiFlex forward without playing a podcast.
+Prerelease links use Spotify because SpotiFlex does not support them. Spotify
+tracking query strings and fragments are omitted.
 
-This fork assumes the SpotiFlex maintainer supplies that support. It does not
-launch a development checkout or require a hardcoded installation path. The
+Pulling SpotiFlex source does not update its installed app or register the URL
+handler. On macOS, rebuild and install the app with `CFBundleURLTypes` containing
+the `spotiflex` scheme, then launch it. A missing handler causes the plugin's
+"Could not open SpotiFlex" message even when the source supports these URLs.
+
+This fork does not launch a development checkout or require a hardcoded installation path. The
 native helper opens only the listed SpotiFlex URLs, so no changes to Equicord's
 global protocol allowlist are needed. SpotiFlex is available only on desktop.
 
