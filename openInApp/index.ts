@@ -36,11 +36,11 @@ interface URLReplacementRule {
 const UrlReplacementRules: Record<string, URLReplacementRule> = {
     spotify: {
         match: /^https:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(track|album|artist|playlist|user|episode|show|prerelease)\/([^/?#]+)(?:[?#].*)?$/,
-        replace: (_, type, id) => `${!IS_WEB && pluginSettings.store.spotifyApp === "spotiflex" && type !== "prerelease" ? "spotiflex" : "spotify"}://${type}/${id}`,
+        replace: (_, type, id) => `${!IS_WEB && pluginSettings.store.spotifyApp === "lyssna" && type !== "prerelease" ? "lyssna" : "spotify"}://${type}/${id}`,
         description: "Open Spotify links in the selected app.",
         shortlinkMatch: /^https:\/\/spotify\.link\/.+$/,
-        accountViewReplace: userId => !IS_WEB && pluginSettings.store.spotifyApp === "spotiflex"
-            ? `spotiflex://user/${encodeURIComponent(userId)}`
+        accountViewReplace: userId => !IS_WEB && pluginSettings.store.spotifyApp === "lyssna"
+            ? `lyssna://user/${encodeURIComponent(userId)}`
             : `spotify:user:${userId}`,
     },
     steam: {
@@ -88,11 +88,11 @@ const pluginSettings = definePluginSettings({
     spotifyApp: {
         type: OptionType.SELECT,
         displayName: "Spotify app",
-        description: "Choose which app opens Spotify links. SpotiFlex must support spotiflex:// links.",
+        description: "Choose which app opens Spotify links. Lyssna must support lyssna:// links.",
         target: "DESKTOP",
         options: [
             { label: "Spotify", value: "spotify" },
-            { label: "SpotiFlex", value: "spotiflex", default: true },
+            { label: "Lyssna", value: "lyssna", default: true },
         ],
     },
     ...Object.entries(UrlReplacementRules).filter(([key]) => key !== "spotify").reduce((acc, [key, rule]) => {
@@ -110,12 +110,12 @@ const Native = VencordNative.pluginHelpers.OpenInAppNative as PluginNative<typeo
 const originalHandleLink = BundledOpenInApp.handleLink;
 
 async function openUrl(url: string) {
-    if (!url.startsWith("spotiflex://")) {
+    if (!url.startsWith("lyssna://")) {
         await VencordNative.native.openExternal(url);
         return true;
     }
 
-    const result = await Native.openSpotiFlex(url);
+    const result = await Native.openLyssna(url);
     if (!result.success)
         showToast({ text: result.error, variant: "failure" });
     return result.success;
@@ -123,7 +123,7 @@ async function openUrl(url: string) {
 
 export default definePlugin({
     name: "OpenInApp",
-    description: "Userplugin fork of OpenInApp with SpotiFlex support, maintained separately from Equicord.",
+    description: "Userplugin fork of OpenInApp with Lyssna support, maintained separately from Equicord.",
     tags: ["Utility"],
     authors: [Devs.Ven, Devs.surgedevs],
     settings: pluginSettings,
@@ -162,6 +162,9 @@ export default definePlugin({
     ],
 
     start() {
+        const savedSpotifyApp: unknown = pluginSettings.plain.spotifyApp;
+        if (savedSpotifyApp === "spotiflex")
+            pluginSettings.store.spotifyApp = "lyssna";
         BundledOpenInApp.handleLink = this.handleLink;
     },
 

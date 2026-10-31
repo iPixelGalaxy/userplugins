@@ -43,14 +43,14 @@ export async function resolveRedirect(_: IpcMainInvokeEvent, url: string) {
     return getRedirect(url);
 }
 
-export async function openSpotiFlex(_: IpcMainInvokeEvent, url: string) {
-    if (typeof url !== "string" || url.length > 4096 || !/^spotiflex:\/\/(track|album|artist|playlist|user|episode|show)\/[A-Za-z0-9._~%\-]+$/.test(url))
-        return { success: false, error: "Invalid SpotiFlex link." } as const;
+export async function openLyssna(_: IpcMainInvokeEvent, url: string) {
+    if (typeof url !== "string" || url.length > 4096 || !/^lyssna:\/\/(track|album|artist|playlist|user|episode|show)\/[A-Za-z0-9._~%\-]+$/.test(url))
+        return { success: false, error: "Invalid Lyssna link." } as const;
 
     try {
         await shell.openExternal(url);
         return { success: true } as const;
     } catch {
-        return { success: false, error: "Could not open SpotiFlex. Install a version that supports spotiflex:// links." } as const;
+        return { success: false, error: "Could not open Lyssna. Install a version that supports lyssna:// links." } as const;
     }
 }

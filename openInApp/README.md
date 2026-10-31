@@ -13,7 +13,8 @@ the bundled OpenInApp native helper. It is enabled automatically and has no
 separate settings or toggle.
 
 The **Spotify app** dropdown sits immediately below the **Spotify** toggle.
-Choose **Spotify** or **SpotiFlex** (the default). The toggle controls whether
+Choose **Spotify** or **Lyssna** (the default). Existing SpotiFlex selections
+migrate to Lyssna automatically. The toggle controls whether
 Spotify links open in an app at all. Changing the selected app takes effect
 when settings are saved, without another restart.
 
@@ -22,34 +23,34 @@ use the selected app. Steam, Epic Games, Tidal, iTunes, VRCX, and Telegram retai
 their existing behavior. MusicControls' own Spotify URI setting is separate;
 its player links are not handled by OpenInApp.
 
-## SpotiFlex URL support
+## Lyssna URL support
 
-SpotiFlex's URL implementation accepts these URLs when starting and when already
-running. The installed app must register the `spotiflex` protocol with the OS:
+Lyssna's URL implementation accepts these URLs when starting and when already
+running. The installed app must register the `lyssna` protocol with the OS:
 
 ```text
-spotiflex://track/<id>
-spotiflex://album/<id>
-spotiflex://artist/<id>
-spotiflex://playlist/<id>
-spotiflex://user/<id>
-spotiflex://episode/<id>
-spotiflex://show/<id>
+lyssna://track/<id>
+lyssna://album/<id>
+lyssna://artist/<id>
+lyssna://playlist/<id>
+lyssna://user/<id>
+lyssna://episode/<id>
+lyssna://show/<id>
 ```
 
 Track links start playback. Album, artist, playlist, and user links open their
-pages. Episode and show links bring SpotiFlex forward without playing a podcast.
-Prerelease links use Spotify because SpotiFlex does not support them. Spotify
+pages. Episode and show links bring Lyssna forward without playing a podcast.
+Prerelease links use Spotify because Lyssna does not support them. Spotify
 tracking query strings and fragments are omitted.
 
-Pulling SpotiFlex source does not update its installed app or register the URL
+Pulling Lyssna source does not update its installed app or register the URL
 handler. On macOS, rebuild and install the app with `CFBundleURLTypes` containing
-the `spotiflex` scheme, then launch it. A missing handler causes the plugin's
-"Could not open SpotiFlex" message even when the source supports these URLs.
+the `lyssna` scheme, then launch it. A missing handler causes the plugin's
+"Could not open Lyssna" message even when the source supports these URLs.
 
 This fork does not launch a development checkout or require a hardcoded installation path. The
-native helper opens only the listed SpotiFlex URLs, so no changes to Equicord's
-global protocol allowlist are needed. SpotiFlex is available only on desktop.
+native helper opens only the listed Lyssna URLs, so no changes to Equicord's
+global protocol allowlist are needed. Lyssna is available only on desktop.
 
 The source is derived from Equicord's OpenInApp and retains its GPL-3.0-or-later
 license and upstream attribution.
