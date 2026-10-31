@@ -91,8 +91,8 @@ const pluginSettings = definePluginSettings({
         description: "Choose which app opens Spotify links. SpotiFlex must support spotiflex:// links.",
         target: "DESKTOP",
         options: [
-            { label: "Spotify", value: "spotify", default: true },
-            { label: "SpotiFlex", value: "spotiflex" },
+            { label: "Spotify", value: "spotify" },
+            { label: "SpotiFlex", value: "spotiflex", default: true },
         ],
     },
     ...Object.entries(UrlReplacementRules).filter(([key]) => key !== "spotify").reduce((acc, [key, rule]) => {

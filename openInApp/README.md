@@ -6,7 +6,7 @@ Enable **OpenInApp** under **Show UserPlugins**, then restart Discord after load
 the new build. The existing enabled state and app settings are preserved.
 
 The **Spotify app** dropdown sits immediately below the **Spotify** toggle.
-Choose **Spotify** (the default) or **SpotiFlex**. The toggle controls whether
+Choose **Spotify** or **SpotiFlex** (the default). The toggle controls whether
 Spotify links open in an app at all. Changing the selected app takes effect
 when settings are saved, without another restart.
 
