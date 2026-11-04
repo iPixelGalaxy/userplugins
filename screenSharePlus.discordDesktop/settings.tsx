@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { definePluginSettings, migratePluginSetting } from "@api/Settings";
+import { definePluginSettings, migratePluginSetting, SettingsStore } from "@api/Settings";
 import { OptionType } from "@utils/types";
 
 import ScreenSharePlus from "./index";
@@ -14,13 +14,26 @@ import type { CaptureMethod } from "./native/compositor";
 
 migratePluginSetting("ScreenSharePlus", "useObsCapture", "smoothTransitions");
 
+const savedSettings = SettingsStore.plain.plugins.ScreenSharePlus;
+if (savedSettings && ("mobileCompatibility" in savedSettings || "limitFrameRate" in savedSettings)) {
+    delete savedSettings.mobileCompatibility;
+    delete savedSettings.limitFrameRate;
+    SettingsStore.markAsChanged();
+}
+
 const ignoredMonitors: string[] = [];
 
 export const settings = definePluginSettings({
-    mobileCompatibility: {
-        type: OptionType.BOOLEAN,
-        description: "Use H.264 or VP8 for screen sharing, including when another plugin disables these codecs. Applies to new shares.",
-        default: true,
+    codec: {
+        type: OptionType.SELECT,
+        description: "Video codec used for screen sharing. Restart sharing after changing this.",
+        options: [
+            { label: "H264", value: "H264", default: true },
+            { label: "H265", value: "H265" },
+            { label: "AV1", value: "AV1" },
+            { label: "VP8", value: "VP8" },
+            { label: "VP9", value: "VP9" }
+        ],
         hidden: true
     },
     retainScreenshare: {
@@ -66,13 +79,6 @@ export const settings = definePluginSettings({
         markers: [0, 1, 2, 4, 6, 8, 10, 15, 20],
         default: 0,
         stickToMarkers: false,
-        hidden: true,
-        onChange() { ScreenSharePlus.updateBitrate(); }
-    },
-    limitFrameRate: {
-        type: OptionType.BOOLEAN,
-        description: "Limit screen sharing to 30 FPS for more detail during movement.",
-        default: false,
         hidden: true,
         onChange() { ScreenSharePlus.updateBitrate(); }
     },

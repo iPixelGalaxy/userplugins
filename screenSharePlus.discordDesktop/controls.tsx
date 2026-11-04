@@ -4,41 +4,33 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import "./style.css";
-
 import ErrorBoundary from "@components/ErrorBoundary";
 import { Paragraph } from "@components/Paragraph";
 import { useAwaiter } from "@utils/react";
 import type { PluginNative } from "@utils/types";
-import type { FluxStore } from "@vencord/discord-types";
-import { findComponentByCodeLazy, findStoreLazy } from "@webpack";
-import { Alerts, ApplicationStreamingStore, MediaEngineStore, Menu, React, showToast, useEffect, UserStore, useStateFromStores } from "@webpack/common";
+import { findComponentByCodeLazy } from "@webpack";
+import { Alerts, MediaEngineStore, Menu, React, showToast, useEffect } from "@webpack/common";
 
 import { isIgnoredMonitor, monitorKey } from "./monitors";
 import type { Monitor } from "./native";
 import type { CaptureMethod } from "./native/compositor";
 import { rememberIgnoredMonitors, settings } from "./settings";
 
-interface VideoProps {
-    streamId: string;
-    paused: boolean;
-    className: string;
-}
-
-interface PreviewStore extends FluxStore {
-    getStreamId(userId: string, guildId: string | null, context: "stream"): string | undefined;
-}
-
 interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
     MenuComponent: typeof Menu.Menu;
-    live: boolean;
 }
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const RetainIndicator = findComponentByCodeLazy("displayOnly:!0", 'usageVariant:"indicator"');
-const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "limitFrameRate", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "mobileCompatibility"] satisfies Array<keyof typeof settings.def>;
+const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "codec"] satisfies Array<keyof typeof settings.def>;
 const CAPTURE_MODES = [{ label: "Discord capture", value: "discord" as const }, ...settings.def.captureMethod.options];
-const VideoStreamStore = findStoreLazy("VideoStreamStore") as PreviewStore;
+const CODEC_NOTES = {
+    H264: "Broad compatibility and hardware encoding. Safest choice for Android and iOS viewers.",
+    H265: "Higher compression than H264. Mobile viewing depends on the device and Discord client.",
+    AV1: "High quality at lower bitrates with a supported encoder. Mobile viewing requires a compatible device and Discord client.",
+    VP8: "Broad compatibility with software encoding. Suitable for Android and iOS viewers.",
+    VP9: "Higher compression than VP8, with more encoding work. Mobile viewing depends on the device and Discord client."
+};
 
 async function changeCapture(method: CaptureMethod | "discord") {
     if (method === "discord") { settings.store.useObsCapture = false; return; }
@@ -65,19 +57,15 @@ async function changeCapture(method: CaptureMethod | "discord") {
     });
 }
 
-const LivePreview = ErrorBoundary.wrap(function LivePreview() {
-    const streamId = useStateFromStores([VideoStreamStore, UserStore, ApplicationStreamingStore], () => {
-        const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
-        return stream ? VideoStreamStore.getStreamId(UserStore.getCurrentUser().id, stream.guildId, "stream") : undefined;
-    });
-    if (!streamId) return <Paragraph>Waiting for your stream preview.</Paragraph>;
-    const Video = MediaEngineStore.getMediaEngine().Video as React.ComponentType<VideoProps>;
-    return <Video streamId={streamId} paused={false} className="vc-screenshare-plus-preview" />;
-}, { noop: true });
-
-export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, live, children, ...props }: CaptureMenuProps) {
-    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, limitFrameRate, keepPreview, retainScreenshare, retainScreenshareTimeout, mobileCompatibility } = settings.use(KEYS);
+export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
+    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, keepPreview, retainScreenshare, retainScreenshareTimeout, codec } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
+    const [encoders, codecError, codecsPending] = useAwaiter(() => new Promise<string>(resolve => {
+        MediaEngineStore.getMediaEngine().getCodecCapabilities(resolve);
+    }).then(capabilities => {
+        const available: { codec: string; encode: boolean; }[] = JSON.parse(capabilities);
+        return available.filter(codec => codec.encode).map(codec => codec.codec);
+    }));
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
     const allowed = monitors.filter((monitor: Monitor) => !isIgnoredMonitor(monitor, ignoredMonitors, monitors)).length;
@@ -119,20 +107,23 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
                     />
                 ))}
             </Menu.MenuItem>
-            <Menu.MenuCheckboxItem
-                id="vc-screenshare-plus-mobile-compatibility"
-                label="Mobile compatibility"
-                subtext="Uses H.264 or VP8, overriding codec exclusions. Restart sharing after changing this."
-                checked={mobileCompatibility}
-                action={() => { settings.store.mobileCompatibility = !settings.store.mobileCompatibility; }}
-            />
-            <Menu.MenuCheckboxItem
-                id="vc-screenshare-plus-frame-rate"
-                label="Limit to 30 FPS"
-                subtext="More detail during movement. Restart sharing after changing this."
-                checked={limitFrameRate}
-                action={() => { settings.store.limitFrameRate = !limitFrameRate; }}
-            />
+            <Menu.MenuItem id="vc-screenshare-plus-codec" label={`Video codec: ${codec}`}
+                subtext={codecsPending ? "Checking encoder support."
+                    : codecError ? "Could not check encoder support. Reopen this menu to try again."
+                        : "Restart sharing after changing this. All viewers must support the codec."}>
+                {settings.def.codec.options.map(({ label, value }) => (
+                    <Menu.MenuRadioItem
+                        key={value}
+                        id={`vc-screenshare-plus-codec-${value}`}
+                        group="vc-screenshare-plus-codec"
+                        label={label}
+                        subtext={`${CODEC_NOTES[value]}${encoders && !encoders.includes(value) ? " No encoder available on this PC." : ""}`}
+                        checked={codec === value}
+                        disabled={!encoders?.includes(value)}
+                        action={() => { settings.store.codec = value; }}
+                    />
+                ))}
+            </Menu.MenuItem>
             <Menu.MenuItem id="vc-screenshare-plus-ignored" label="Ignored monitors" subtext="Applies to Monitor under mouse.">
                 {monitors.length === 0
                     ? <Menu.MenuItem id="vc-screenshare-plus-loading" label={pending ? "Loading monitors..." : "Could not load monitors."} disabled />
@@ -163,7 +154,6 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
             />
             <Menu.MenuCheckboxItem id="vc-screenshare-plus-preview" label="Keep stream preview playing" checked={keepPreview}
                 action={() => { settings.store.keepPreview = !keepPreview; }} />
-            {live && keepPreview ? <Menu.MenuControlItem id="vc-screenshare-plus-live-preview" interactive={false} control={() => <LivePreview />} /> : null}
         </Menu.MenuGroup>
         {children}
     </MenuComponent>;

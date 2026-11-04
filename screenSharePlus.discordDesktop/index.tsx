@@ -20,8 +20,6 @@ interface StreamBitrate {
     bitrateMin: number;
     bitrateMax: number;
     bitrateTarget?: number;
-    capture: { framerate: number; };
-    encode: { framerate: number; };
 }
 
 interface MonitorMenuProps {
@@ -177,14 +175,14 @@ export default definePlugin({
             find: 'navId:"manage-streams"',
             replacement: {
                 match: /(\i\.\i),\{(?=[^{}]{0,250}?navId:"manage-streams")/,
-                replace: "$self.CaptureMenu,{MenuComponent:$1,live:true,"
+                replace: "$self.CaptureMenu,{MenuComponent:$1,"
             }
         },
         {
             find: 'navId:"stream-options"',
             replacement: {
                 match: /(\i\.\i),\{(?=[^{}]{0,250}?navId:"stream-options")/,
-                replace: "$self.CaptureMenu,{MenuComponent:$1,live:false,"
+                replace: "$self.CaptureMenu,{MenuComponent:$1,"
             }
         },
         {
@@ -216,7 +214,7 @@ export default definePlugin({
             find: "lastOverrideCodecDenylist.length",
             replacement: {
                 match: /let (\i)=\i\((\i)\),\i=this\.lastOverrideCodecDenylist\.length>0;/,
-                replace: "$&$1=$self.compatibleCodecs($1,$2,this.context);"
+                replace: "$&$1=$self.selectCodec($1,$2,this.context);"
             }
         },
         {
@@ -326,24 +324,22 @@ export default definePlugin({
         return enabled && (context !== "stream" || participantType !== "streamer");
     },
 
-    compatibleCodecs(codecs: CodecInfo[], capabilities: string, context: string) {
-        if (context !== "stream" || !settings.store.mobileCompatibility) return codecs;
+    selectCodec(codecs: CodecInfo[], capabilities: string, context: string) {
+        if (context !== "stream") return codecs;
+        const selected = settings.plain.codec;
         const available: { codec: string; encode: boolean; }[] = JSON.parse(capabilities);
-        return codecs.map(codec => ({ ...codec, encode: (codec.name === "H264" || codec.name === "VP8")
-            && available.some(capability => capability.codec === codec.name && capability.encode) }));
+        if (!available.some(codec => codec.codec === selected && codec.encode)) return codecs;
+        return codecs.map(codec => ({ ...codec, encode: codec.name === selected }));
     },
 
     overrideBitrate<T extends StreamBitrate>(quality: T, streaming: boolean): T {
         if (!streaming) return quality;
-        const { bitrate, limitFrameRate } = settings.store;
-        const maximum = bitrate * 1_000_000;
-        if (maximum === 0 && !limitFrameRate) return quality;
+        const maximum = settings.plain.bitrate * 1_000_000;
+        if (maximum === 0) return quality;
         return { ...quality,
-            bitrateMin: maximum === 0 ? quality.bitrateMin : Math.min(quality.bitrateMin, maximum),
-            bitrateMax: maximum === 0 ? quality.bitrateMax : Math.min(quality.bitrateMax, maximum),
-            bitrateTarget: maximum === 0 || quality.bitrateTarget === undefined ? quality.bitrateTarget : Math.min(quality.bitrateTarget, maximum),
-            capture: limitFrameRate ? { ...quality.capture, framerate: Math.min(quality.capture.framerate, 30) } : quality.capture,
-            encode: limitFrameRate ? { ...quality.encode, framerate: Math.min(quality.encode.framerate, 30) } : quality.encode
+            bitrateMin: Math.min(quality.bitrateMin, maximum),
+            bitrateMax: Math.min(quality.bitrateMax, maximum),
+            bitrateTarget: quality.bitrateTarget === undefined ? quality.bitrateTarget : Math.min(quality.bitrateTarget, maximum)
         };
     },
 
@@ -471,7 +467,7 @@ export default definePlugin({
         if (!followsCursor && (!settings.plain.useObsCapture || !/^(?:screen|window):/.test(source.id))) return source;
         const currentGeneration = generation;
         const ignoredMonitors = settings.plain.ignoredMonitors;
-        const frameRate = Math.min(ApplicationStreamingSettingsStore.getState().fps, settings.store.limitFrameRate ? 30 : 240);
+        const frameRate = Math.min(ApplicationStreamingSettingsStore.getState().fps, 240);
         const captureMethod = settings.store.captureMethod;
 
         try {
