@@ -22,7 +22,7 @@ interface CaptureMenuProps extends React.ComponentProps<typeof Menu.Menu> {
 
 const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
 const RetainIndicator = findComponentByCodeLazy("displayOnly:!0", 'usageVariant:"indicator"');
-const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "codec"] satisfies Array<keyof typeof settings.def>;
+const KEYS = ["useObsCapture", "captureMethod", "ignoredMonitors", "bitrate", "keepPreview", "retainScreenshare", "retainScreenshareTimeout", "codec", "viewerZoomSpeed"] satisfies Array<keyof typeof settings.def>;
 const CAPTURE_MODES = [{ label: "Discord capture", value: "discord" as const }, ...settings.def.captureMethod.options];
 const CODEC_NOTES = {
     H264: "Broad compatibility and hardware encoding. Safest choice for Android and iOS viewers.",
@@ -58,7 +58,7 @@ async function changeCapture(method: CaptureMethod | "discord") {
 }
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
-    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, keepPreview, retainScreenshare, retainScreenshareTimeout, codec } = settings.use(KEYS);
+    const { useObsCapture, captureMethod, ignoredMonitors, bitrate, keepPreview, retainScreenshare, retainScreenshareTimeout, codec, viewerZoomSpeed } = settings.use(KEYS);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     const [encoders, codecError, codecsPending] = useAwaiter(() => new Promise<string>(resolve => {
         MediaEngineStore.getMediaEngine().getCodecCapabilities(resolve);
@@ -69,6 +69,7 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
     useEffect(() => () => { void Native.stopIdentification(); }, []);
     const monitors = !pending && !error && result?.success ? result.monitors : [];
     const allowed = monitors.filter((monitor: Monitor) => !isIgnoredMonitor(monitor, ignoredMonitors, monitors)).length;
+    const zoomSpeedPercent = Math.round(viewerZoomSpeed * 100);
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
@@ -151,6 +152,14 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
                 control={(props, ref) => <Menu.MenuSliderControl {...props} ref={ref} minValue={0} maxValue={20} value={bitrate}
                     renderValue={(value: number) => value < 1 ? "Automatic" : `${Math.round(value)} Mbps`}
                     onChange={(value: number) => { settings.store.bitrate = Math.round(value); }} />}
+            />
+            <Menu.MenuControlItem
+                id="vc-screenshare-plus-viewer-zoom-speed"
+                label={`Viewer zoom speed: ${zoomSpeedPercent / 100}×`}
+                control={(props, ref) => <Menu.MenuSliderControl {...props} ref={ref}
+                    minValue={settings.def.viewerZoomSpeed.min * 100} maxValue={settings.def.viewerZoomSpeed.max * 100} value={zoomSpeedPercent}
+                    renderValue={(value: number) => `${value / 100}×`}
+                    onChange={(value: number) => { settings.store.viewerZoomSpeed = value / 100; }} />}
             />
             <Menu.MenuCheckboxItem id="vc-screenshare-plus-preview" label="Keep stream preview playing" checked={keepPreview}
                 action={() => { settings.store.keepPreview = !keepPreview; }} />
