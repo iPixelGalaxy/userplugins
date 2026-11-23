@@ -6,7 +6,7 @@
 
 import { Divider } from "@components/Divider";
 import { FormSwitch } from "@components/FormSwitch";
-import { HeadingSecondary } from "@components/LegacyHeading";
+import { Heading } from "@components/Heading";
 import { Margins } from "@utils/margins";
 import type { RenderModalProps } from "@vencord/discord-types";
 import { Modal, openModal, SearchableSelect, SelectedChannelStore, useMemo } from "@webpack/common";
@@ -26,7 +26,9 @@ function LanguageSelect({ settingsKey, includeAuto }: { settingsKey: typeof lang
     }, [includeAuto]);
     return (
         <section className={Margins.bottom16}>
-            <HeadingSecondary>{settings.def[settingsKey].description}</HeadingSecondary>
+            <Heading tag="h3" size="md" weight="medium" color="text-strong" className={Margins.bottom8}>
+                {settings.def[settingsKey].description}
+            </Heading>
             <SearchableSelect options={options} value={currentValue} placeholder="Select a language" maxVisibleItems={5} closeOnSelect onChange={value => settings.store[settingsKey] = value} />
         </section>
     );

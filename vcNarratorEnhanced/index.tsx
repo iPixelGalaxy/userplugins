@@ -11,7 +11,7 @@ import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
 import { Divider } from "@components/Divider";
 import ErrorBoundary from "@components/ErrorBoundary";
-import { HeadingSecondary } from "@components/LegacyHeading";
+import { Heading } from "@components/Heading";
 import { Paragraph } from "@components/Paragraph";
 import { Devs, EquicordDevs } from "@utils/constants";
 import { classNameFactory } from "@utils/css";
@@ -143,7 +143,9 @@ function TroubleshootingSettings() {
         <div className={cl("troubleshooting")}>
             <Divider className={cl("divider")} />
 
-            <HeadingSecondary className={cl("title")}>Troubleshooting</HeadingSecondary>
+            <Heading tag="h3" size="md" weight="medium" color="text-strong" className={cl("title")}>
+                Troubleshooting
+            </Heading>
 
             <div className={cl("row")}>
                 <div className={cl("buttons")}>
@@ -925,7 +927,9 @@ function VoiceSelectModal({ modalProps, user }: { modalProps: RenderModalProps; 
             ]}
         >
             <section className={Margins.bottom16}>
-                <HeadingSecondary>Select voice for {user.username}</HeadingSecondary>
+                <Heading tag="h3" size="md" weight="medium" color="text-strong" className={Margins.bottom8}>
+                    Select voice for {user.username}
+                </Heading>
                 <SearchableSelect
                     options={options}
                     value={options.find(o => o.value === currentValue)?.value}
@@ -1241,9 +1245,9 @@ export default definePlugin({
                 </div>
 
                 <div className={cl("preview-section")}>
-                    <HeadingSecondary className={cl("preview-title")}>
+                    <Heading tag="h3" size="md" weight="medium" color="text-strong" className={cl("preview-title")}>
                         Preview Sounds {busy && "(playing...)"}
-                    </HeadingSecondary>
+                    </Heading>
                     <Paragraph className={cl("preview-subtitle")}>
                         Uses your selected narrator voice
                     </Paragraph>
