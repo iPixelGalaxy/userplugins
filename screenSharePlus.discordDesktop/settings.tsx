@@ -24,6 +24,15 @@ if (savedSettings && ("mobileCompatibility" in savedSettings || "limitFrameRate"
 const ignoredMonitors: string[] = [];
 
 export const settings = definePluginSettings({
+    viewerZoomSpeed: {
+        type: OptionType.SLIDER,
+        displayName: "Viewer zoom speed",
+        description: "Controls how quickly scrolling zooms when watching a screen share. 1× uses Discord's default speed.",
+        markers: [0.25, 1, 2, 3, 4, 5],
+        default: 1,
+        stickToMarkers: false,
+        componentProps: { onValueRender: (value: number) => `${Number(value.toFixed(2))}×` }
+    },
     codec: {
         type: OptionType.SELECT,
         description: "Video codec used for screen sharing. Restart sharing after changing this.",

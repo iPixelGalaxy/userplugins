@@ -158,7 +158,7 @@ async function followCursor() {
 
 export default definePlugin({
     name: "ScreenSharePlus",
-    description: "Adds capture controls and a screen share option that follows your mouse between monitors.",
+    description: "Adds capture controls, cursor-following screen sharing, and adjustable viewer zoom speed.",
     authors: [EquicordDevs.nobody],
     tags: ["Media", "Voice"],
     settings,
@@ -236,6 +236,13 @@ export default definePlugin({
             replacement: {
                 match: /\i\.\i\.isFocused\(\)/,
                 replace: "($self.keepPreview()||$&)"
+            }
+        },
+        {
+            find: "WheelEvent.DOM_DELTA_PIXEL",
+            replacement: {
+                match: /(?<=\*\*)\(0,\i\.clamp\)\(\i\.current\/\d+,-1,1\)(?=,\i\(\i\),"wheel"\))/,
+                replace: "$self.scaleViewerZoomStep($&)"
             }
         },
         {
@@ -318,6 +325,10 @@ export default definePlugin({
 
     keepPreview() {
         return settings.plain.keepPreview;
+    },
+
+    scaleViewerZoomStep(step: number) {
+        return step * (settings.plain.viewerZoomSpeed ?? settings.def.viewerZoomSpeed.default);
     },
 
     allowSingleCpuCopy(enabled: boolean, context: string, participantType: string) {
