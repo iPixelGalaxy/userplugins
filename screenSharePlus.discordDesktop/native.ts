@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+import { execFile } from "child_process";
 import { desktopCapturer, type DesktopCapturerSource, type Display, type IpcMainInvokeEvent, screen } from "electron";
 
 import { isIgnoredList, isIgnoredMonitor, type MonitorIdentity } from "./monitors";
@@ -87,6 +88,36 @@ function isDisplayId(value: unknown): value is string {
 
 function monitorIdentity(display: Display): MonitorIdentity {
     return { id: String(display.id), label: display.label, x: display.bounds.x, y: display.bounds.y };
+}
+
+export async function isScreenHandleAvailable(_: IpcMainInvokeEvent, sourceId: unknown): Promise<boolean> {
+    if (process.platform !== "win32" || typeof sourceId !== "string") return false;
+    const handle = /^screen-handle:([1-9]\d{0,18})$/.exec(sourceId)?.[1];
+    if (!handle) return false;
+
+    const command = `
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenSharePlusMonitor {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MonitorInfo { public int Size; public Rect Monitor, Work; public uint Flags; }
+    [DllImport("user32.dll", ExactSpelling = true)]
+    public static extern bool GetMonitorInfoW(IntPtr monitor, ref MonitorInfo info);
+}
+'@
+$info = New-Object ScreenSharePlusMonitor+MonitorInfo
+$info.Size = [System.Runtime.InteropServices.Marshal]::SizeOf($info)
+if ([ScreenSharePlusMonitor]::GetMonitorInfoW([IntPtr]([long]'${handle}'), [ref]$info)) { exit 0 }
+exit 1`;
+    const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
+    return new Promise(resolve => {
+        execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
+            { windowsHide: true, timeout: 5000 }, error => resolve(error === null));
+    });
 }
 
 export async function prepareCompositor(_: IpcMainInvokeEvent, displayId: unknown, ignored: unknown, frameRate: unknown = 60, captureMethod: unknown = "wgc"): Promise<

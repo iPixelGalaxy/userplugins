@@ -7,6 +7,7 @@
 import * as DataStore from "@api/DataStore";
 import { IS_WINDOWS } from "@utils/constants";
 import { Logger } from "@utils/Logger";
+import type { PluginNative } from "@utils/types";
 import { findByCodeLazy, findByPropsLazy } from "@webpack";
 import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, ChannelStore, FluxDispatcher, lodash, MediaEngineStore, PermissionsBits, PermissionStore, RTCConnectionStore, SelectedChannelStore, showToast, UserStore } from "@webpack/common";
 
@@ -47,7 +48,8 @@ interface RetainedStream {
     };
 }
 
-const getDesktopSources: (engine: ReturnType<typeof MediaEngineStore.getMediaEngine>, windows: boolean, types: string[], size: { width: number; height: number; }) => Promise<Source[]> = findByCodeLazy("Can't get desktop sources outside of native app");
+const Native = VencordNative.pluginHelpers.ScreenSharePlus as PluginNative<typeof import("./native")>;
+const getDesktopSources: (engine: ReturnType<typeof MediaEngineStore.getMediaEngine>, windows: boolean, types: string[]) => Promise<Source[]> = findByCodeLazy("Can't get desktop sources outside of native app");
 const startStreamWithSource: (source: Source, options: RetainedStream["options"]) => Promise<[boolean, string | undefined]> = findByCodeLazy('"startStreamWithSource"');
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
 
@@ -241,15 +243,22 @@ async function resumeScreenshare() {
     try {
         let source = saved.source;
         if (source.id !== FOLLOW_SOURCE_ID) {
-            const sources = await getDesktopSources(MediaEngineStore.getMediaEngine(), IS_WINDOWS, ["screen", "window"], { width: 0, height: 0 });
-            const available = sources.find(candidate => candidate.id === source.id
-                && (source.id.startsWith("screen") || (saved.sourcePid !== null
-                    ? SoundshareStore.getPidFromDesktopSource(candidate.id) === saved.sourcePid : candidate.name === source.name)));
-            if (!available) {
-                if (currentRevision === revision) showToast({ text: "ScreenSharePlus could not resume because the previous source is no longer available. Choose a source to share again.", variant: "critical" });
-                return;
+            const isScreen = source.id.startsWith("screen");
+            const isScreenHandle = IS_WINDOWS && source.id.startsWith("screen-handle:");
+            if (!isScreenHandle || !await Native.isScreenHandleAvailable(source.id)) {
+                const sources = await getDesktopSources(MediaEngineStore.getMediaEngine(), IS_WINDOWS, [isScreen ? "screen" : "window"]);
+                const available = sources.find(candidate => candidate.id === source.id
+                    && (isScreen || (saved.sourcePid !== null
+                        ? SoundshareStore.getPidFromDesktopSource(candidate.id) === saved.sourcePid : candidate.name === source.name)));
+                if (!available) {
+                    if (currentRevision === revision) {
+                        logger.warn("Could not find the saved screenshare source.", source.id.split(":")[0]);
+                        showToast({ text: "Saved capture source unavailable. Share again.", variant: "critical" });
+                    }
+                    return;
+                }
+                source = available;
             }
-            source = available;
         }
         if (currentRevision !== revision || !canResumeInChannel(channelId)) return;
         const [success, reason] = await startStreamWithSource(source, saved.options);
