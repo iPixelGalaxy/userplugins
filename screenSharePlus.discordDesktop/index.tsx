@@ -7,11 +7,11 @@
 import { EquicordDevs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
-import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
-import { findByPropsLazy } from "@webpack";
-import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, SelectedChannelStore, showToast, useEffect, UserStore, VoiceActions } from "@webpack/common";
+import type { ApplicationStream, CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
+import { findByCodeLazy, findByPropsLazy } from "@webpack";
+import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, RTCConnectionStore, SelectedChannelStore, showToast, useEffect, UserStore, VoiceActions } from "@webpack/common";
 
-import { CaptureMenu, renderViewerZoomSpeedMenuItem } from "./controls";
+import { CaptureMenu, renderAutoWatchMenuItem, renderViewerZoomSpeedMenuItem } from "./controls";
 import { openPreparationProgress } from "./progress";
 import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
 import { rememberIgnoredMonitors, settings } from "./settings";
@@ -56,6 +56,36 @@ const logger = new Logger("ScreenSharePlus");
 const SOURCE_ID = FOLLOW_SOURCE_ID;
 const SOURCE_NAME = FOLLOW_SOURCE_NAME;
 const SoundshareStore: { getPidFromDesktopSource(id: string): number | null; } = findByPropsLazy("getPidFromDesktopSource");
+const watchStream: (stream: ApplicationStream, options: { forceMultiple: boolean; noFocus: boolean; }) => void =
+    findByCodeLazy('type:"STREAM_WATCH"', ".forceMultiple", ".noFocus");
+
+let autoWatchRunning = false;
+let autoWatchChannelId: string | undefined;
+let seenStreams = new Set<string>();
+
+function queueAutoWatch() {
+    if (!autoWatchRunning || !settings.plain.autoWatchStreams) return;
+    FluxDispatcher.wait(() => {
+        if (!autoWatchRunning || !settings.plain.autoWatchStreams) return;
+        const channelId = SelectedChannelStore.getVoiceChannelId();
+        if (channelId !== autoWatchChannelId) {
+            autoWatchChannelId = channelId;
+            seenStreams.clear();
+        }
+        if (!channelId || !RTCConnectionStore.isConnected() || RTCConnectionStore.getChannelId() !== channelId) return;
+        const userId = UserStore.getCurrentUser()?.id;
+        if (!userId) return;
+
+        const streams = ApplicationStreamingStore.getAllApplicationStreamsForChannel(channelId);
+        const previouslySeen = seenStreams;
+        seenStreams = new Set(streams.map(stream => stream.ownerId));
+        for (const stream of streams) {
+            if (stream.ownerId !== userId && !previouslySeen.has(stream.ownerId)
+                && !ApplicationStreamingStore.getActiveStreamForApplicationStream(stream))
+                watchStream(stream, { forceMultiple: true, noFocus: true });
+        }
+    });
+}
 
 let following = false;
 let captureChannelId: string | undefined;
@@ -165,7 +195,12 @@ export default definePlugin({
 
     contextMenus: {
         "stream-context"(children) {
-            children.push(<Menu.MenuGroup key="vc-screenshare-plus-viewer-zoom">{renderViewerZoomSpeedMenuItem()}</Menu.MenuGroup>);
+            children.push(
+                <Menu.MenuGroup key="vc-screenshare-plus-viewer-controls">
+                    {renderAutoWatchMenuItem()}
+                    {renderViewerZoomSpeedMenuItem()}
+                </Menu.MenuGroup>
+            );
         }
     },
 
@@ -317,6 +352,8 @@ export default definePlugin({
     ],
 
     start() {
+        autoWatchRunning = true;
+        queueAutoWatch();
         if (!settings.store.obsCaptureAcknowledged) settings.store.useObsCapture = false;
         void startRetention(following, audioSourceId);
         void Native.getMonitors().then(result => {
@@ -325,6 +362,8 @@ export default definePlugin({
     },
 
     stop() {
+        autoWatchRunning = false;
+        seenStreams.clear();
         stopRetention();
         stopFollowing();
     },
@@ -417,11 +456,20 @@ export default definePlugin({
         STREAM_UPDATE_SETTINGS() {
             rememberScreenshare(following, undefined, audioSourceId);
         },
-        VOICE_CHANNEL_SELECT: voiceChannelSelected,
-        VOICE_STATE_UPDATES: queueResume,
+        VOICE_CHANNEL_SELECT(event: Parameters<typeof voiceChannelSelected>[0]) {
+            voiceChannelSelected(event);
+            queueAutoWatch();
+        },
+        VOICE_STATE_UPDATES() {
+            queueResume();
+            queueAutoWatch();
+        },
         RTC_CONNECTION_STATE({ context, state }: { context: string; state: string; }) {
             if (context !== "default") return;
-            if (state === "RTC_CONNECTED") queueResume();
+            if (state === "RTC_CONNECTED") {
+                queueResume();
+                queueAutoWatch();
+            }
             else pauseRetention();
         },
         WINDOW_UNLOAD() { pauseRetention(); },
@@ -458,12 +506,20 @@ export default definePlugin({
             queueResume();
         },
         LOGOUT() {
+            seenStreams.clear();
             stopRetention();
             stopFollowing();
         },
         CONNECTION_OPEN() {
+            seenStreams.clear();
+            queueAutoWatch();
             void startRetention(following, audioSourceId);
         }
+    },
+
+    onAutoWatchChange() {
+        seenStreams.clear();
+        queueAutoWatch();
     },
 
     onRetainChange(enabled: boolean) {

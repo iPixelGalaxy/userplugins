@@ -57,6 +57,17 @@ async function changeCapture(method: CaptureMethod | "discord") {
     });
 }
 
+export function renderAutoWatchMenuItem() {
+    return (
+        <Menu.MenuCheckboxItem
+            id="vc-screenshare-plus-auto-watch"
+            label={settings.def.autoWatchStreams.displayName}
+            checked={settings.store.autoWatchStreams}
+            action={() => { settings.store.autoWatchStreams = !settings.store.autoWatchStreams; }}
+        />
+    );
+}
+
 export function renderViewerZoomSpeedMenuItem() {
     const { displayName, markers } = settings.def.viewerZoomSpeed;
     return (
@@ -87,6 +98,7 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
 
     return <MenuComponent {...props}>
         <Menu.MenuGroup key="vc-screenshare-plus-controls">
+            {renderAutoWatchMenuItem()}
             <Menu.MenuItem
                 id="vc-screenshare-plus-retain"
                 label="Retain Screenshare"

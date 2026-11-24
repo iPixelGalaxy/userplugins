@@ -24,6 +24,13 @@ if (savedSettings && ("mobileCompatibility" in savedSettings || "limitFrameRate"
 const ignoredMonitors: string[] = [];
 
 export const settings = definePluginSettings({
+    autoWatchStreams: {
+        type: OptionType.BOOLEAN,
+        displayName: "Always watch every screenshare",
+        description: "Automatically watch current and new screenshares in your voice call without switching focus.",
+        default: false,
+        onChange() { ScreenSharePlus.onAutoWatchChange(); }
+    },
     viewerZoomSpeed: {
         type: OptionType.SLIDER,
         displayName: "Viewer zoom speed",
