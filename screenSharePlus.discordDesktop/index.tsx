@@ -9,7 +9,7 @@ import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
 import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
-import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, SelectedChannelStore, showToast, UserStore, VoiceActions } from "@webpack/common";
+import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, SelectedChannelStore, showToast, useEffect, UserStore, VoiceActions } from "@webpack/common";
 
 import { CaptureMenu, renderViewerZoomSpeedMenuItem } from "./controls";
 import { openPreparationProgress } from "./progress";
@@ -252,6 +252,13 @@ export default definePlugin({
             }
         },
         {
+            find: '"--custom-zoom-scale"',
+            replacement: {
+                match: /(return\(0,\i\.jsx\)\("div",\{ref:(\i),className:.{0,100}?\]:(\i)&&\i,.{0,120}?)onWheel:(\i),(?=onClick:\i,children:)/,
+                replace: "$self.useViewerZoomWheel($2,$3,$4);$1"
+            }
+        },
+        {
             find: 'push("NOT_POPPED_OUT")',
             replacement: {
                 match: /(?<=\.HIDDEN_STREAM\|\|)null==\i\.streamId\|\|(?=\i\.isPoppedOut\|\|\i\.push\("FILTERED"\))/,
@@ -349,6 +356,23 @@ export default definePlugin({
 
     scaleViewerZoomStep(step: number) {
         return step * (settings.plain.viewerZoomSpeed ?? settings.def.viewerZoomSpeed.default);
+    },
+
+    useViewerZoomWheel(wrapperRef: React.RefObject<HTMLDivElement | null>, enabled: boolean, zoom: (event: WheelEvent) => void) {
+        useEffect(() => {
+            const wrapper = wrapperRef.current;
+            if (!enabled || !wrapper) return;
+
+            const tile = wrapper.closest<HTMLElement>("[data-call-tile]") ?? wrapper;
+            const onWheel = (event: WheelEvent) => {
+                if (event.defaultPrevented || event.deltaY === 0) return;
+                event.preventDefault();
+                event.stopPropagation();
+                zoom(event);
+            };
+            tile.addEventListener("wheel", onWheel, { passive: false });
+            return () => tile.removeEventListener("wheel", onWheel);
+        }, [wrapperRef, enabled, zoom]);
     },
 
     allowSingleCpuCopy(enabled: boolean, context: string, participantType: string) {
