@@ -63,6 +63,10 @@ let autoWatchRunning = false;
 let autoWatchChannelId: string | undefined;
 let seenStreams = new Set<string>();
 
+function pauseRetentionOnPageHide() {
+    pauseRetention();
+}
+
 function queueAutoWatch() {
     if (!autoWatchRunning || !settings.plain.autoWatchStreams) return;
     FluxDispatcher.wait(() => {
@@ -355,6 +359,7 @@ export default definePlugin({
         autoWatchRunning = true;
         queueAutoWatch();
         if (!settings.store.obsCaptureAcknowledged) settings.store.useObsCapture = false;
+        window.addEventListener("pagehide", pauseRetentionOnPageHide);
         void startRetention(following, audioSourceId);
         void Native.getMonitors().then(result => {
             if (result.success) rememberIgnoredMonitors(result.monitors);
@@ -364,6 +369,7 @@ export default definePlugin({
     stop() {
         autoWatchRunning = false;
         seenStreams.clear();
+        window.removeEventListener("pagehide", pauseRetentionOnPageHide);
         stopRetention();
         stopFollowing();
     },
@@ -472,7 +478,6 @@ export default definePlugin({
             }
             else pauseRetention();
         },
-        WINDOW_UNLOAD() { pauseRetention(); },
         MEDIA_ENGINE_SET_GO_LIVE_SOURCE({ settings: sourceSettings }: SourceEvent) {
             if (sourceSettings !== null && sourceSettings.context !== "stream") return;
             if (sourceSettings === null && ApplicationStreamingStore.getCurrentUserActiveStream()) return;
@@ -494,8 +499,11 @@ export default definePlugin({
                 startTimeout = undefined;
             }
         },
+        STREAM_CLOSE({ streamKey, canShowFeedback }: { streamKey: string; canShowFeedback: boolean; }) {
+            if (canShowFeedback) stopRetainedStream(streamKey);
+        },
         STREAM_STOP({ streamKey }: { streamKey: string; }) {
-            stopRetainedStream(streamKey);
+            pauseRetention(streamKey);
             if (streamKey.endsWith(UserStore.getCurrentUser().id)
                 && (captureChannelId === undefined || streamKey.split(":")[2] === captureChannelId)) stopFollowing();
         },

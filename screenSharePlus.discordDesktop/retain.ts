@@ -196,7 +196,7 @@ export function voiceChannelSelected({ channelId, currentVoiceChannelId }: { cha
     if (channelId === currentVoiceChannelId) return;
     pauseRetention();
     cancellation++;
-    if (attemptedChannel !== SelectedChannelStore.getVoiceChannelId()) attemptedChannel = undefined;
+    attemptedChannel = undefined;
     queueResume();
 }
 
@@ -221,10 +221,7 @@ async function resumeScreenshare() {
     if (!channelId || RTCConnectionStore.getChannelId() !== channelId) return;
     if (retained.userId !== UserStore.getCurrentUser().id) return;
     const channel = ChannelStore.getChannel(channelId);
-    if (!channel || channel.guild_id !== retained.guildId) {
-        save(undefined);
-        return;
-    }
+    if (!channel || channel.guild_id !== retained.guildId) return;
     const stream = ApplicationStreamingStore.getCurrentUserActiveStream();
     if (stream?.channelId === channelId && MediaEngineStore.getGoLiveSource() != null) {
         startHeartbeat(channelId);
@@ -235,8 +232,8 @@ async function resumeScreenshare() {
         return;
     }
     if (attemptedChannel === channelId || resumingChannel !== undefined) return;
-    attemptedChannel = channelId;
     if (channel.isGuildStageVoice() || !PermissionStore.can(PermissionsBits.STREAM, channel)) return;
+    attemptedChannel = channelId;
     const saved = retained;
     const currentRevision = revision;
     resumingChannel = channelId;
