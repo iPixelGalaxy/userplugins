@@ -9,9 +9,9 @@ import { Logger } from "@utils/Logger";
 import definePlugin, { PluginNative } from "@utils/types";
 import type { CodecInfo, MediaEngineConnection } from "@vencord/discord-types";
 import { findByPropsLazy } from "@webpack";
-import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, React, SelectedChannelStore, showToast, UserStore, VoiceActions } from "@webpack/common";
+import { ApplicationStreamingSettingsStore, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, SelectedChannelStore, showToast, UserStore, VoiceActions } from "@webpack/common";
 
-import { CaptureMenu } from "./controls";
+import { CaptureMenu, renderViewerZoomSpeedMenuItem } from "./controls";
 import { openPreparationProgress } from "./progress";
 import { canResumeInChannel, changeRetention, FOLLOW_SOURCE_ID, FOLLOW_SOURCE_NAME, pauseRetention, queueResume, rememberScreenshare, startRetention, stopRetainedStream, stopRetention, updateRetentionTimeout, voiceChannelSelected } from "./retain";
 import { rememberIgnoredMonitors, settings } from "./settings";
@@ -163,6 +163,12 @@ export default definePlugin({
     tags: ["Media", "Voice"],
     settings,
 
+    contextMenus: {
+        "stream-context"(children) {
+            children.push(<Menu.MenuGroup key="vc-screenshare-plus-viewer-zoom">{renderViewerZoomSpeedMenuItem()}</Menu.MenuGroup>);
+        }
+    },
+
     patches: [
         {
             find: '"MenuCheckboxItem"',
@@ -243,6 +249,20 @@ export default definePlugin({
             replacement: {
                 match: /(?<=\*\*)\(0,\i\.clamp\)\(\i\.current\/\d+,-1,1\)(?=,\i\(\i\),"wheel"\))/,
                 replace: "$self.scaleViewerZoomStep($&)"
+            }
+        },
+        {
+            find: 'push("NOT_POPPED_OUT")',
+            replacement: {
+                match: /(?<=\.HIDDEN_STREAM\|\|)null==\i\.streamId\|\|(?=\i\.isPoppedOut\|\|\i\.push\("FILTERED"\))/,
+                replace: ""
+            }
+        },
+        {
+            find: /streamKey:\i\.id,enableZoom:/,
+            replacement: {
+                match: /(\i)=((\i)\.type===\i\.\i\.STREAM)&&(\i)(?=;return.{0,125}?enableZoom:\1[,}])/,
+                replace: "$1=$2&&($4||$3.streamId!=null)"
             }
         },
         {

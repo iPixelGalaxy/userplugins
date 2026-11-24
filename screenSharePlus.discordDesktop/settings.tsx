@@ -25,12 +25,13 @@ const ignoredMonitors: string[] = [];
 
 export const settings = definePluginSettings({
     viewerZoomSpeed: {
-        type: OptionType.NUMBER,
+        type: OptionType.SLIDER,
+        displayName: "Viewer zoom speed",
         description: "Controls how quickly scrolling zooms when watching a screen share. 1× uses Discord's default speed.",
         default: 1,
-        min: 0.25,
-        max: 10,
-        hidden: true
+        markers: [0.25, 1, 2, 4, 6, 8, 10],
+        stickToMarkers: false,
+        componentProps: { onValueRender: (value: number) => `${Number(value.toFixed(2))}×` }
     },
     codec: {
         type: OptionType.SELECT,
