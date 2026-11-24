@@ -9,7 +9,7 @@ import { Paragraph } from "@components/Paragraph";
 import { useAwaiter } from "@utils/react";
 import type { PluginNative } from "@utils/types";
 import { findComponentByCodeLazy } from "@webpack";
-import { Alerts, MediaEngineStore, Menu, React, showToast, useEffect } from "@webpack/common";
+import { Alerts, ApplicationStreamingStore, FluxDispatcher, MediaEngineStore, Menu, React, SelectedChannelStore, showToast, useEffect, useStateFromStores } from "@webpack/common";
 
 import { isIgnoredMonitor, monitorKey } from "./monitors";
 import type { Monitor } from "./native";
@@ -85,6 +85,9 @@ export function renderViewerZoomSpeedMenuItem() {
 
 export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuComponent, children, ...props }: CaptureMenuProps) {
     const { useObsCapture, captureMethod, ignoredMonitors, bitrate, keepPreview, retainScreenshare, retainScreenshareTimeout, codec } = settings.use(KEYS);
+    const streamChannelId = useStateFromStores([ApplicationStreamingStore, SelectedChannelStore], () => ApplicationStreamingStore.getCurrentUserActiveStream()?.channelId);
+    const showStreamPreview = useStateFromStores([ApplicationStreamingStore], () =>
+        streamChannelId != null && !ApplicationStreamingStore.isSelfStreamHidden(streamChannelId), [streamChannelId]);
     const [result, error, pending] = useAwaiter(() => Native.getMonitors());
     const [encoders, codecError, codecsPending] = useAwaiter(() => new Promise<string>(resolve => {
         MediaEngineStore.getMediaEngine().getCodecCapabilities(resolve);
@@ -180,6 +183,21 @@ export const CaptureMenu = ErrorBoundary.wrap(function CaptureMenu({ MenuCompone
                     onChange={(value: number) => { settings.store.bitrate = Math.round(value); }} />}
             />
             {renderViewerZoomSpeedMenuItem()}
+            <Menu.MenuCheckboxItem
+                id="vc-screenshare-plus-show-preview"
+                label="Show my stream preview"
+                checked={showStreamPreview}
+                disabled={streamChannelId == null}
+                dontCloseOnAction
+                action={() => {
+                    if (streamChannelId == null) return;
+                    void FluxDispatcher.dispatch({
+                        type: "STREAM_UPDATE_SELF_HIDDEN",
+                        channelId: streamChannelId,
+                        selfStreamHidden: showStreamPreview
+                    });
+                }}
+            />
             <Menu.MenuCheckboxItem id="vc-screenshare-plus-preview" label="Keep stream preview playing" checked={keepPreview}
                 action={() => { settings.store.keepPreview = !keepPreview; }} />
         </Menu.MenuGroup>
