@@ -16,7 +16,8 @@ const settings = definePluginSettings({}).withPrivateSettings<{
 }>();
 
 function canDisableSameChannelNotifications(channel: Channel | undefined) {
-    return channel != null && !channel.isCategory() && !channel.isDirectory() && !channel.isForumChannel() && !channel.isVocal();
+    return channel != null && (channel.isGuildVocal()
+        || (!channel.isCategory() && !channel.isDirectory() && !channel.isForumChannel() && !channel.isVocal()));
 }
 
 function isDisabled(channelId: string) {
@@ -41,30 +42,25 @@ function toggleGuild(guildId: string) {
         : [...guildIds, guildId];
 }
 
-function getChannelId(message: unknown, channel: unknown) {
-    if (typeof channel === "string") return channel;
-    if (typeof channel === "object" && channel !== null && "id" in channel && typeof channel.id === "string") return channel.id;
-    if (typeof message === "object" && message !== null && "channel_id" in message && typeof message.channel_id === "string") return message.channel_id;
-}
-
-function getGuildId(message: unknown, channelId: string) {
-    if (typeof message === "object" && message !== null && "guild_id" in message && typeof message.guild_id === "string") return message.guild_id;
-    return ChannelStore.getChannel(channelId)?.guild_id;
-}
-
 export default definePlugin({
     name: "DisableSameChannelNotifications",
-    description: "Disable native same-channel notifications in selected channels.",
+    description: "Mute same-channel message sounds in selected text and voice chats.",
     authors: [Devs.Ven],
     settings,
 
     patches: [
         {
-            find: "NOTIFICATION_CREATE:function",
-            replacement: {
-                match: /(\i)&&(\i\.\i\.playNotificationSound\("message3",\.4\))/,
-                replace: "$self.shouldSuppress(arguments[0]?.message,void 0)?void 0:$1&&$2"
-            }
+            find: '"NotificationStore"',
+            replacement: [
+                {
+                    match: /!\i\.\i\.isSoundDisabled\(\i\)(?=;if\(\i&&\(\i\(\i\),\i&&\i\.\i\.playNotificationSound\("message3",)/,
+                    replace: "$&&&!$self.shouldSuppress(arguments[0].channelId)"
+                },
+                {
+                    match: /&&(?=\i\.\i\.playNotificationSound\("message3",)/,
+                    replace: "$&!$self.shouldSuppress(arguments[0].channelId,true)&&"
+                }
+            ]
         }
     ],
 
@@ -98,10 +94,14 @@ export default definePlugin({
         }
     },
 
-    shouldSuppress(message: unknown, channel: unknown) {
-        const channelId = getChannelId(message, channel);
-        return channelId != null
-            && (isDisabled(channelId) || isGuildDisabled(getGuildId(message, channelId) ?? ""))
-            && SelectedChannelStore.getChannelId() === channelId;
+    shouldSuppress(channelId: string, sameChannelSound = false) {
+        const selected = SelectedChannelStore.getChannelId() === channelId;
+        if (!selected && SelectedChannelStore.getVoiceChannelId() !== channelId) return false;
+
+        const channel = ChannelStore.getChannel(channelId);
+        if (!channel?.isGuildVocal() && !(selected && sameChannelSound)) return false;
+
+        const guildId = channel?.guild_id;
+        return isDisabled(channelId) || (guildId != null && isGuildDisabled(guildId));
     }
 });
